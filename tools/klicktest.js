@@ -2,8 +2,11 @@
 // klicktest.js — Durchlauf der Oberflaeche per Headless-Chrome (CDP):
 // Einrichtung (oder Anmeldung), Zugang + Host anlegen, verbinden, Host-Schluessel
 // bestaetigen, tippen, Dateien und Hilfe oeffnen, Palette — mit Fotos.
+// Prueft dazu: gleich hohe Leisten (Unterkanten auf einer Linie), Trefferflaechen >= 44 px
+// auf dem Telefon, kein waagrechter Ueberlauf, keine Skriptfehler.
 //
 // Aufruf: node --experimental-websocket tools/klicktest.js <url> <ssh-host> <ssh-port> <ssh-user> <ssh-pw> <fotoordner> [breite hoehe]
+// <ssh-host> = «-»: ohne SSH-Ziel (nur Oberflaeche: Startseite, Dialoge, Palette, Blaetter, Einstellungen).
 // Braucht eine FRISCHE Instanz (nicht eingerichtet) oder SSHAPP_USER/SSHAPP_PW fuer die Anmeldung.
 // Chrome: CHROME=/pfad, sonst Puppeteer-Cache (~/.cache/puppeteer/chrome-headless-shell).
 'use strict';
@@ -16,7 +19,7 @@ if (!url || !sshHost || !fotos) {
   console.error('Aufruf: node --experimental-websocket tools/klicktest.js <url> <ssh-host> <ssh-port> <ssh-user> <ssh-pw> <fotoordner> [breite hoehe]');
   process.exit(2);
 }
-const W = +wStr || 1440, H = +hStr || 900, MOBIL = W < 900;
+const W = +wStr || 1440, H = +hStr || 900, MOBIL = W < 900, OHNE_SSH = sshHost === '-';
 const BENUTZER = process.env.SSHAPP_USER || 'admin', PASSWORT = process.env.SSHAPP_PW || 'klicktest-passwort';
 const warte = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -102,19 +105,74 @@ function chromePfad() {
   await bis('!!document.querySelector(".kopf")', 15000, 'Arbeitsplatz');
   await warte(600);
   await foto('start-leer');
+  const probleme = [];
 
-  // Zugang und Host anlegen (ueber die Dialoge)
+  // Leisten (V8): Reiter der Seitenleiste, Tab-Leiste und Seitenleisten-Koepfe enden auf derselben Zeile.
+  const leisten = async (wo) => {
+    if (MOBIL) return;
+    const r = await ev(`(() => [...document.querySelectorAll('.reiter, .tabs, .seite-kopf')].filter(e => e.offsetParent !== null)
+      .map(e => ({ k: e.className, h: e.getBoundingClientRect().height, u: e.getBoundingClientRect().bottom })))()`);
+    const unten = new Set(r.map((x) => x.u)), hoehe = new Set(r.map((x) => x.h));
+    console.log('Leisten (' + wo + '):', r.map((x) => x.k.split(' ')[0] + ' ' + x.h + '/' + x.u).join(', '));
+    if (unten.size > 1 || hoehe.size > 1) probleme.push('Leisten ungleich (' + wo + '): ' + JSON.stringify(r));
+  };
+  // Trefferflaechen auf dem Telefon: sichtbare Bedienelemente unter 44 px (Polster per ::after zaehlt mit).
+  const flaechen = async (wo) => {
+    if (!MOBIL) return;
+    const klein = await ev(`(() => { const aus = [];
+      for (const e of document.querySelectorAll('button, a, input:not([type=checkbox]):not([type=hidden]), select, textarea, label.check')) {
+        if (e.closest('.versteckt') || e.classList.contains('versteckt')) continue;
+        const r = e.getBoundingClientRect(); if (!r.width || !r.height || r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) continue;
+        let h = r.height, w = r.width; const n = getComputedStyle(e, '::after');
+        if (n.content && n.content !== 'none' && n.position === 'absolute') { h -= (parseFloat(n.top) || 0) + (parseFloat(n.bottom) || 0); w -= (parseFloat(n.left) || 0) + (parseFloat(n.right) || 0); }
+        if (h < 43.5 || w < 43.5) aus.push(((e.getAttribute('aria-label') || e.textContent || e.placeholder || '').trim().slice(0, 24) || e.tagName) + ' ' + Math.round(w) + 'x' + Math.round(h));
+      } return aus; })()`);
+    if (klein.length) probleme.push('Trefferflaechen < 44 px (' + wo + '): ' + klein.join(' | '));
+  };
+  await leisten('Start');
+  await flaechen('Start');
+
+  // Dialoge fotografieren, Zugang und Host per API anlegen (unabhaengig vom Aufbau der Dialoge)
   await ev('App.zugangBearbeiten({})');
-  await setze('#z-name', 'testziel'); await setze('#z-benutzer', sshUser); await setze('#z-pw', sshPw);
+  await warte(300);
   await foto('zugang-dialog');
-  await klick('Speichern', 'document.querySelector(".dialog")');
-  await bis('App.daten.zugaenge.length > 0', 5000, 'Zugang gespeichert');
+  await flaechen('Zugang-Dialog');
+  await ev('dialogStapel.slice().forEach((d) => d.zu())');
   await ev('App.hostBearbeiten({})');
-  await setze('#h-name', 'testziel'); await setze('#h-adresse', sshHost); await setze('#h-port', sshPort);
-  await ev(`(() => { const s = document.getElementById('h-zugang'); s.value = String(App.daten.zugaenge[0].id); return 1; })()`);
-  await setze('#h-tags', 'labor, kritisch');
+  await warte(300);
   await foto('host-dialog');
-  await klick('Speichern und verbinden', 'document.querySelector(".dialog")');
+  await flaechen('Host-Dialog');
+  await ev('dialogStapel.slice().forEach((d) => d.zu())');
+  if (OHNE_SSH) {
+    await ev(`(async () => { await api('POST', '/api/hosts', { name: 'ohne-ziel', adresse: '127.0.0.1', port: 1, benutzer: 'pi', tags: ['labor'] }); await App.datenLaden(); return 1; })()`);
+    await warte(300);
+    await foto('start-mit-host');
+    await flaechen('Start mit Host');
+    if (await ev('App.start.scrollWidth > App.start.clientWidth + 1')) probleme.push('Startseite seitlich verschiebbar');
+    if (MOBIL) {
+      await ev('App.seiteUmschalten("links", true)'); await warte(400); await foto('hosts-blatt'); await flaechen('Hosts-Blatt');
+      await ev('history.back()'); await warte(400);
+      if (await ev('App.seiten.links')) probleme.push('Zurueck-Geste schliesst das Hosts-Blatt nicht');
+    } else {
+      await ev('App.seiteUmschalten("dateien", true); App.seiteUmschalten("hilfe", true)'); await warte(500);
+      await leisten('alle Seitenleisten offen'); await foto('seitenleisten');
+      await ev('App.seiteUmschalten("dateien", false); App.seiteUmschalten("hilfe", false)');
+    }
+    await ev('App.palette("archiv entpacken")'); await warte(1500); await foto('palette'); await flaechen('Palette');
+    await ev('App.paletteObj.schliessen()');
+    await ev('App.einstellungen()'); await warte(500); await foto('einstellungen'); await flaechen('Einstellungen');
+    await ev('dialogStapel.slice().forEach((d) => d.zu())');
+    const fehler = await ev('window.__kt || []');
+    const ueberlauf = await ev('document.documentElement.scrollWidth > innerWidth + 1');
+    console.log('Fehler im Browser:', fehler.length ? fehler : 'keine');
+    console.log('Waagrechter Ueberlauf:', ueberlauf ? 'JA' : 'nein');
+    console.log('Pruefpunkte:', probleme.length ? probleme : 'alle gut');
+    process.exit(fehler.length || ueberlauf || probleme.length ? 1 : 0);
+  }
+  const zugang = await ev(`api('POST', '/api/zugaenge', { name: 'testziel', benutzer: ${JSON.stringify(sshUser)}, passwort: ${JSON.stringify(sshPw)} })`);
+  const host = await ev(`api('POST', '/api/hosts', { name: 'testziel', adresse: ${JSON.stringify(sshHost)}, port: ${+sshPort || 22}, zugangId: ${zugang.id}, tags: ['labor', 'kritisch'], geraet: 'server' })`);
+  await ev('App.datenLaden()');
+  await ev(`App.verbinden(App.daten.hosts.find((h) => h.id === ${host.id}))`);
 
   // Host-Schluessel bestaetigen
   // Host-Schluessel: beim ersten Mal Rueckfrage, danach bekannt.
@@ -125,6 +183,8 @@ function chromePfad() {
   }
   await bis('App.aktiv && App.aktiv.zustand === "bereit"', 15000, 'Terminal bereit');
   await warte(1200);
+  await leisten('mit Tab');
+  await flaechen('Terminal');
   await ev('App.aktiv.tippen("ls -la /etc | head -n 15\\r")');
   await warte(1000);
   await ev('App.aktiv.tippen("cd /etc && tar -xzf ")');
@@ -183,5 +243,6 @@ function chromePfad() {
   const ueberlauf = await ev('document.documentElement.scrollWidth > innerWidth + 1');
   console.log('Fehler im Browser:', fehler.length ? fehler : 'keine');
   console.log('Waagrechter Ueberlauf:', ueberlauf ? 'JA' : 'nein');
-  process.exit(fehler.length || ueberlauf ? 1 : 0);
+  console.log('Pruefpunkte:', probleme.length ? probleme : 'alle gut');
+  process.exit(fehler.length || ueberlauf || probleme.length ? 1 : 0);
 })().catch((e) => { console.error('ABBRUCH:', e.message); process.exit(1); });

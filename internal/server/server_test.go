@@ -17,6 +17,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,12 +33,32 @@ import (
 
 // --- eingebetteter SSH-Server: Echo-Shell + SFTP ---
 
+// sshOptionen steuern das Verhalten des eingebetteten SSH-Servers.
+type sshOptionen struct {
+	benutzer, passwort string
+	// exec: "" = POSIX-Shell (fuehrt den Startbefehl aus), "ablehnen" = exec verboten,
+	// "fish" = die Login-Shell versteht den Startbefehl nicht (Fehlertext, Code 127).
+	exec     string
+	ohneSFTP bool
+}
+
+type testSSH struct {
+	addr    string
+	hostKey ssh.PublicKey
+	kanaele atomic.Int32 // je geoeffnetem Session-Kanal +1
+	offen   atomic.Int32 // gerade offene Session-Kanaele
+}
+
 func sshTestServer(t *testing.T, benutzer, passwort string) (addr string) {
+	return sshTestServerMit(t, sshOptionen{benutzer: benutzer, passwort: passwort}).addr
+}
+
+func sshTestServerMit(t *testing.T, o sshOptionen) *testSSH {
 	t.Helper()
 	_, priv, _ := ed25519.GenerateKey(rand.Reader)
 	signer, _ := ssh.NewSignerFromKey(priv)
 	cfg := &ssh.ServerConfig{PasswordCallback: func(c ssh.ConnMetadata, pw []byte) (*ssh.Permissions, error) {
-		if c.User() == benutzer && string(pw) == passwort {
+		if c.User() == o.benutzer && string(pw) == o.passwort {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("nein")
@@ -48,6 +69,28 @@ func sshTestServer(t *testing.T, benutzer, passwort string) (addr string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { l.Close() })
+	ts := &testSSH{addr: l.Addr().String(), hostKey: signer.PublicKey()}
+	ende := func(ch ssh.Channel, code uint32) {
+		ch.SendRequest("exit-status", false, ssh.Marshal(struct{ C uint32 }{code}))
+		ch.Close()
+	}
+	shell := func(ch ssh.Channel) {
+		ch.Write([]byte("willkommen\r\n$ "))
+		go func() {
+			buf := make([]byte, 1024)
+			for {
+				n, err := ch.Read(buf)
+				if err != nil {
+					return
+				}
+				if strings.Contains(string(buf[:n]), "exit") {
+					ende(ch, 0)
+					return
+				}
+				ch.Write(append([]byte("echo:"), buf[:n]...))
+			}
+		}()
+	}
 	go func() {
 		for {
 			nc, err := l.Accept()
@@ -66,33 +109,44 @@ func sshTestServer(t *testing.T, benutzer, passwort string) (addr string) {
 						continue
 					}
 					ch, rq, _ := nch.Accept()
+					ts.kanaele.Add(1)
+					ts.offen.Add(1)
 					go func() {
+						defer ts.offen.Add(-1)
+						defer ch.Close()
 						for req := range rq {
 							switch req.Type {
 							case "pty-req", "window-change", "env":
 								req.Reply(true, nil)
-							case "shell", "exec":
+							case "shell":
 								req.Reply(true, nil)
-								if req.Type == "exec" {
+								shell(ch)
+							case "exec":
+								var befehl struct{ Text string }
+								ssh.Unmarshal(req.Payload, &befehl)
+								switch {
+								case strings.Contains(befehl.Text, "authorized_keys"):
+									req.Reply(true, nil)
+									ch.Write([]byte("SSHAPP-OK\n"))
+									ende(ch, 0)
+								case o.exec == "ablehnen":
+									req.Reply(false, nil)
+								case o.exec == "fish":
+									req.Reply(true, nil)
+									ch.Write([]byte("fish: $$ is not the pid. In fish, please use $fish_pid.\r\n"))
+									ende(ch, 127)
+								case befehl.Text == term.StartBefehl:
+									req.Reply(true, nil)
 									ch.Write([]byte("\x1b]7770;pid=4242\x07"))
+									shell(ch)
+								default:
+									req.Reply(false, nil)
 								}
-								ch.Write([]byte("willkommen\r\n$ "))
-								go func() {
-									buf := make([]byte, 1024)
-									for {
-										n, err := ch.Read(buf)
-										if err != nil {
-											return
-										}
-										if strings.Contains(string(buf[:n]), "exit") {
-											ch.SendRequest("exit-status", false, ssh.Marshal(struct{ C uint32 }{0}))
-											ch.Close()
-											return
-										}
-										ch.Write(append([]byte("echo:"), buf[:n]...))
-									}
-								}()
 							case "subsystem":
+								if o.ohneSFTP {
+									req.Reply(false, nil)
+									continue
+								}
 								req.Reply(true, nil)
 								go func() {
 									srv, _ := sftp.NewServer(ch)
@@ -108,7 +162,7 @@ func sshTestServer(t *testing.T, benutzer, passwort string) (addr string) {
 			}()
 		}
 	}()
-	return l.Addr().String()
+	return ts
 }
 
 // --- Test-Client ---
@@ -148,6 +202,10 @@ func (c *client) rufe(methode, pfad string, rumpf any, aus any) int {
 }
 
 func testApp(t *testing.T) (*httptest.Server, *Server) {
+	return testAppMit(t, Optionen{Version: "test"})
+}
+
+func testAppMit(t *testing.T, opt Optionen) (*httptest.Server, *Server) {
 	t.Helper()
 	st, err := store.Oeffnen(filepath.Join(t.TempDir(), "t.db"))
 	if err != nil {
@@ -156,7 +214,7 @@ func testApp(t *testing.T) (*httptest.Server, *Server) {
 	tr, _ := vault.Neu(nil)
 	tm := term.NeuerManager()
 	hi, _ := help.Laden(t.TempDir())
-	s := Neu(st, tr, tm, hi, Optionen{Version: "test"})
+	s := Neu(st, tr, tm, hi, opt)
 	ts := httptest.NewServer(s)
 	t.Cleanup(func() { ts.Close(); s.Close(); tm.Close(); st.Close() })
 	return ts, s

@@ -3,6 +3,7 @@
 package server
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -11,8 +12,10 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/uiff/ssh-app/internal/help"
@@ -29,12 +32,25 @@ const (
 	// Fehlversuche je Adresse, danach Sperre.
 	maxFehlversuche = 5
 	sperreDauer     = 15 * time.Minute
+	// Hoechstens so viele Anfragen warten auf einen Argon2-Platz (oder rechnen); weitere bekommen 503.
+	maxArgonWartend = 16
+	// Kopf automatischer Abfragen (Zeitgeber, Wiederverbinden): sie verlaengern die Anmeldung nicht.
+	// Beim WebSocket (kein eigener Kopf moeglich) gilt der Parameter auto=1.
+	autoKopf = "X-SSH-App-Auto"
 )
 
 type Optionen struct {
 	Version        string
-	Leerlauf       time.Duration // Abmeldung nach Inaktivitaet
+	Leerlauf       time.Duration // Abmeldung nach so langer Zeit ohne Bedienung
 	SicheresCookie bool          // Secure-Flag (HTTPS)
+	HSTS           bool          // Strict-Transport-Security senden (gilt fuer alle Ports des Namens)
+	// Proxys sind vertrauenswuerdige Reverse-Proxys: nur von dort gilt X-Forwarded-For.
+	Proxys []netip.Prefix
+	// HostPruefung lehnt fremde Hostnamen ab (Schutz vor DNS-Rebinding im HTTP-Betrieb).
+	// Erlaubt sind IP-Adressen, localhost, Namen ohne Punkt, lokale Endungen und Hosts.
+	HostPruefung bool
+	Hosts        []string // zusaetzlich erlaubte Namen, «*.beispiel.ch» fuer alle Unternamen
+	Origins      []string // zusaetzlich erlaubte Origins fuer den WebSocket (Muster wie path.Match)
 }
 
 type Server struct {
@@ -45,16 +61,24 @@ type Server struct {
 	opt   Optionen
 
 	mu        sync.Mutex
-	anmeldung map[string]time.Time // Token -> letzte Aktivitaet
+	anmeldung map[string]time.Time // Token -> letzte Bedienung
 	fehler    map[string]*fehlversuch
 
-	argon chan struct{} // begrenzt gleichzeitige Argon2-Ableitungen (je 64 MiB)
-	stop  chan struct{}
-	mux   *http.ServeMux
+	// kopfMu: Einrichten, Einspielen, Zuruecksetzen und Passwort aendern ersetzen den
+	// Tresor-Kopf und laufen nacheinander.
+	kopfMu sync.Mutex
+
+	argon   chan struct{} // begrenzt gleichzeitige Argon2-Ableitungen (je 64 MiB)
+	wartend atomic.Int32  // Anfragen, die auf einen Argon2-Platz warten oder rechnen
+	stop    chan struct{}
+	mux     *http.ServeMux
 }
 
+// fehlversuch zaehlt je Adresse (IPv6: je /64) die gescheiterten und die gerade
+// laufenden Versuche.
 type fehlversuch struct {
-	n       int
+	n       int // gescheitert im aktuellen Fenster
+	laufend int // reserviert, Ergebnis steht noch aus
 	bis     time.Time
 	zuletzt time.Time
 }
@@ -80,10 +104,67 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("X-Frame-Options", "DENY")
 	h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-	if s.opt.SicheresCookie {
+	if s.opt.HSTS {
 		h.Set("Strict-Transport-Security", "max-age=31536000")
 	}
+	if !s.hostErlaubt(r) {
+		text := "Zugriff über den Namen «" + kurz(hostOhnePort(r.Host), 80) + "» ist nicht freigegeben (Schutz vor DNS-Rebinding). Den Namen in SSHAPP_HOSTS eintragen."
+		if strings.HasPrefix(r.URL.Path, "/api/") {
+			fehler(w, http.StatusMisdirectedRequest, text)
+		} else {
+			http.Error(w, text, http.StatusMisdirectedRequest)
+		}
+		return
+	}
 	s.mux.ServeHTTP(w, r)
+}
+
+func kurz(t string, n int) string {
+	if r := []rune(t); len(r) > n {
+		return string(r[:n]) + "…"
+	}
+	return t
+}
+
+func hostOhnePort(h string) string {
+	if x, _, err := net.SplitHostPort(h); err == nil {
+		h = x
+	}
+	return strings.ToLower(strings.TrimSuffix(strings.Trim(h, "[]"), "."))
+}
+
+// lokaleEndungen gehoeren zu Namen im eigenen Netz, die niemand Fremdes auf eine
+// eigene Adresse zeigen lassen kann.
+var lokaleEndungen = []string{".localhost", ".local", ".lan", ".home", ".home.arpa", ".internal", ".intranet", ".localdomain", ".fritz.box", ".ts.net"}
+
+// hostErlaubt prueft den Host-Kopf gegen DNS-Rebinding: Eine fremde Seite kann ihren
+// eigenen Namen auf die Adresse der App zeigen lassen und waere dann «gleiche Herkunft».
+func (s *Server) hostErlaubt(r *http.Request) bool {
+	if !s.opt.HostPruefung || s.vonProxy(r) {
+		return true
+	}
+	host := hostOhnePort(r.Host)
+	if host == "" || host == "localhost" {
+		return true
+	}
+	if _, err := netip.ParseAddr(host); err == nil {
+		return true
+	}
+	for _, n := range s.opt.Hosts {
+		n = strings.ToLower(n)
+		if host == n || (strings.HasPrefix(n, "*.") && strings.HasSuffix(host, n[1:])) {
+			return true
+		}
+	}
+	if !strings.Contains(host, ".") {
+		return true // Rechnername im eigenen Netz
+	}
+	for _, e := range lokaleEndungen {
+		if strings.HasSuffix(host, e) {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) routen() {
@@ -182,10 +263,15 @@ func (s *Server) csrf(f http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// istAuto: automatische Abfrage (Zeitgeber, Wiederverbinden), keine Bedienung.
+func istAuto(r *http.Request) bool {
+	return r.Header.Get(autoKopf) == "1" || r.URL.Query().Get("auto") == "1"
+}
+
 func (s *Server) angemeldet(f http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(cookieName)
-		if err != nil || !s.tokenGueltig(c.Value) {
+		if err != nil || !s.tokenGueltig(c.Value, !istAuto(r)) {
 			fehler(w, http.StatusUnauthorized, "Bitte anmelden")
 			return
 		}
@@ -193,7 +279,9 @@ func (s *Server) angemeldet(f http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-func (s *Server) tokenGueltig(t string) bool {
+// tokenGueltig prueft eine Anmeldung. auffrischen = es war Bedienung: die
+// Leerlaufzeit beginnt neu. Abgelaufene Anmeldungen werden entfernt.
+func (s *Server) tokenGueltig(t string, auffrischen bool) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	zuletzt, ok := s.anmeldung[t]
@@ -201,8 +289,15 @@ func (s *Server) tokenGueltig(t string) bool {
 		delete(s.anmeldung, t)
 		return false
 	}
-	s.anmeldung[t] = time.Now()
+	if auffrischen {
+		s.anmeldung[t] = time.Now()
+	}
 	return true
+}
+
+// pruefAbstand: so oft prueft ein offener WebSocket, ob seine Anmeldung noch gilt.
+func (s *Server) pruefAbstand() time.Duration {
+	return min(5*time.Second, max(s.opt.Leerlauf/10, 50*time.Millisecond))
 }
 
 func (s *Server) anmeldungStarten(w http.ResponseWriter) {
@@ -243,7 +338,7 @@ func (s *Server) leerlaufWache() {
 		}
 		leer := len(s.anmeldung) == 0
 		for ip, f := range s.fehler {
-			if time.Since(f.zuletzt) > sperreDauer && time.Now().After(f.bis) {
+			if f.laufend == 0 && time.Since(f.zuletzt) > sperreDauer && time.Now().After(f.bis) {
 				delete(s.fehler, ip)
 			}
 		}
@@ -255,7 +350,22 @@ func (s *Server) leerlaufWache() {
 	}
 }
 
-func clientIP(r *http.Request) string {
+// vertraut meldet, ob eine Adresse zu einem vertrauenswuerdigen Proxy gehoert.
+func (s *Server) vertraut(a string) bool {
+	ip, err := netip.ParseAddr(strings.Trim(a, "[]"))
+	if err != nil {
+		return false
+	}
+	ip = ip.Unmap()
+	for _, p := range s.opt.Proxys {
+		if p.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+func entferntHost(r *http.Request) string {
 	h, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
 		return r.RemoteAddr
@@ -263,45 +373,152 @@ func clientIP(r *http.Request) string {
 	return h
 }
 
-// gesperrt meldet, ob die Adresse wegen zu vieler Fehlversuche warten muss.
-func (s *Server) gesperrt(r *http.Request) (bool, time.Duration) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	f := s.fehler[clientIP(r)]
-	if f != nil && time.Now().Before(f.bis) {
-		return true, time.Until(f.bis).Round(time.Second)
-	}
-	return false, 0
+// vonProxy: die Anfrage kommt direkt von einem vertrauenswuerdigen Proxy.
+func (s *Server) vonProxy(r *http.Request) bool {
+	return len(s.opt.Proxys) > 0 && s.vertraut(entferntHost(r))
 }
 
-func (s *Server) fehlversuch(r *http.Request) {
+// clientIP liefert die Adresse des Browsers. Hinter einem vertrauenswuerdigen Proxy
+// (SSHAPP_PROXY) gilt der letzte fremde Eintrag in X-Forwarded-For, sonst die
+// Gegenstelle der Verbindung.
+func (s *Server) clientIP(r *http.Request) string {
+	h := entferntHost(r)
+	if !s.vonProxy(r) {
+		return h
+	}
+	teile := strings.Split(strings.Join(r.Header.Values("X-Forwarded-For"), ","), ",")
+	if len(teile) == 1 && strings.TrimSpace(teile[0]) == "" {
+		teile = []string{r.Header.Get("X-Real-IP")}
+	}
+	for i := len(teile) - 1; i >= 0; i-- {
+		a := strings.TrimSpace(teile[i])
+		if a == "" {
+			continue
+		}
+		if x, _, err := net.SplitHostPort(a); err == nil {
+			a = x
+		}
+		ip, err := netip.ParseAddr(strings.Trim(a, "[]"))
+		if err != nil {
+			break // ungueltig: weiter links nichts mehr glauben
+		}
+		h = ip.Unmap().String()
+		if !s.vertraut(h) {
+			break
+		}
+	}
+	return h
+}
+
+// sperrSchluessel fasst IPv6-Adressen zum /64 zusammen (ein Anschluss hat viele).
+func sperrSchluessel(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	a = a.Unmap()
+	if a.Is6() {
+		if p, err := a.Prefix(64); err == nil {
+			return p.String()
+		}
+	}
+	return a.String()
+}
+
+// versuch ist ein reservierter Anmelde- oder Schluesselversuch einer Adresse.
+type versuch struct {
+	s      *Server
+	f      *fehlversuch
+	schl   string
+	fertig bool
+}
+
+const (
+	versuchOffen = iota
+	versuchFalsch
+	versuchRichtig
+)
+
+// versuchBeginnen reserviert einen Versuch, bevor gerechnet wird. Gleichzeitige
+// Anfragen zaehlen so schon gegen die Grenze; mehr als maxFehlversuche sind je
+// Sperrfenster nicht moeglich. Ohne Reservierung kommt der Grund der Ablehnung zurueck.
+func (s *Server) versuchBeginnen(r *http.Request) (*versuch, string) {
+	schl := sperrSchluessel(s.clientIP(r))
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ip := clientIP(r)
-	f := s.fehler[ip]
+	f := s.fehler[schl]
 	if f == nil {
 		f = &fehlversuch{}
-		s.fehler[ip] = f
+		s.fehler[schl] = f
 	}
-	f.n++
+	jetzt := time.Now()
+	f.zuletzt = jetzt
+	if jetzt.Before(f.bis) {
+		return nil, "Zu viele Fehlversuche — noch " + f.bis.Sub(jetzt).Round(time.Second).String() + " gesperrt"
+	}
+	if f.n+f.laufend >= maxFehlversuche {
+		return nil, "Zu viele Anmeldeversuche gleichzeitig — bitte kurz warten"
+	}
+	f.laufend++
+	return &versuch{s: s, f: f, schl: schl}, ""
+}
+
+func (v *versuch) beenden(ergebnis int) {
+	v.s.mu.Lock()
+	defer v.s.mu.Unlock()
+	if v.fertig {
+		return
+	}
+	v.fertig = true
+	f := v.f
+	f.laufend--
 	f.zuletzt = time.Now()
-	if f.n >= maxFehlversuche {
-		f.bis = time.Now().Add(sperreDauer)
+	switch ergebnis {
+	case versuchFalsch:
+		f.n++
+		if f.n >= maxFehlversuche {
+			f.bis = time.Now().Add(sperreDauer)
+			f.n = 0
+			log.Printf("Anmeldung für %s nach %d Fehlversuchen für %s gesperrt", v.schl, maxFehlversuche, sperreDauer)
+		}
+	case versuchRichtig:
+		// Nur den Zaehler zuruecksetzen; eine laufende Sperre bleibt bestehen.
 		f.n = 0
-		log.Printf("Anmeldung für %s nach %d Fehlversuchen für %s gesperrt", ip, maxFehlversuche, sperreDauer)
 	}
 }
 
-func (s *Server) erfolg(r *http.Request) {
-	s.mu.Lock()
-	delete(s.fehler, clientIP(r))
-	s.mu.Unlock()
+func (v *versuch) falsch()    { v.beenden(versuchFalsch) }
+func (v *versuch) richtig()   { v.beenden(versuchRichtig) }
+func (v *versuch) abbrechen() { v.beenden(versuchOffen) }
+
+var errBelegt = errors.New("Gerade zu viele Anmeldeversuche — bitte kurz warten")
+
+// mitArgon fuehrt f aus, sobald einer der Argon2-Plaetze frei ist. Die Warteschlange
+// ist begrenzt (errBelegt), und Anfragen, deren Browser schon weg ist, rechnen nicht.
+func (s *Server) mitArgon(ctx context.Context, f func()) error {
+	if s.wartend.Add(1) > maxArgonWartend {
+		s.wartend.Add(-1)
+		return errBelegt
+	}
+	defer s.wartend.Add(-1)
+	select {
+	case s.argon <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	defer func() { <-s.argon }()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	f()
+	return nil
 }
 
-func (s *Server) mitArgon(f func()) {
-	s.argon <- struct{}{}
-	defer func() { <-s.argon }()
-	f()
+// argonFehler antwortet auf einen Fehler von mitArgon (ist der Browser weg, nicht mehr).
+func argonFehler(w http.ResponseWriter, err error) {
+	if errors.Is(err, errBelegt) {
+		fehler(w, http.StatusServiceUnavailable, err.Error())
+	}
 }
 
 // --- Einrichtung und Anmeldung ---
@@ -309,7 +526,7 @@ func (s *Server) mitArgon(f func()) {
 func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	angemeldet := false
 	if c, err := r.Cookie(cookieName); err == nil {
-		angemeldet = s.tokenGueltig(c.Value)
+		angemeldet = s.tokenGueltig(c.Value, !istAuto(r))
 	}
 	antwort := map[string]any{
 		"eingerichtet": s.tr.Angelegt(),
@@ -337,10 +554,23 @@ func (s *Server) einrichten(w http.ResponseWriter, r *http.Request) {
 		fehler(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if s.tr.Angelegt() { // schnelle Antwort ohne Warten auf andere Vorgaenge
+		fehler(w, http.StatusConflict, vault.ErrSchonAngelegt.Error())
+		return
+	}
+	s.kopfMu.Lock()
+	defer s.kopfMu.Unlock()
+	if s.tr.Angelegt() {
+		fehler(w, http.StatusConflict, vault.ErrSchonAngelegt.Error())
+		return
+	}
 	var kopf []byte
 	var sk string
 	var err error
-	s.mitArgon(func() { kopf, sk, err = s.tr.Einrichten(strings.TrimSpace(z.Benutzer), z.Passwort) })
+	if e := s.mitArgon(r.Context(), func() { kopf, sk, err = s.tr.Einrichten(strings.TrimSpace(z.Benutzer), z.Passwort) }); e != nil {
+		argonFehler(w, e)
+		return
+	}
 	if errors.Is(err, vault.ErrSchonAngelegt) {
 		fehler(w, http.StatusConflict, err.Error())
 		return
@@ -350,38 +580,44 @@ func (s *Server) einrichten(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.st.SetMeta(MetaTresor, kopf); err != nil {
-		fehler(w, http.StatusInternalServerError, "Speichern fehlgeschlagen: "+err.Error())
+		log.Printf("Einrichtung speichern: %v", err)
+		fehler(w, http.StatusInternalServerError, "Speichern fehlgeschlagen")
 		return
 	}
-	log.Printf("Einrichtung abgeschlossen (Benutzer %s)", s.tr.Benutzer())
+	log.Printf("Einrichtung abgeschlossen (Benutzer %s, von %s)", s.tr.Benutzer(), s.clientIP(r))
 	s.anmeldungStarten(w)
 	jsonAntwort(w, http.StatusOK, map[string]string{"sicherheitsschluessel": sk})
 }
 
 func (s *Server) anmelden(w http.ResponseWriter, r *http.Request) {
-	if g, rest := s.gesperrt(r); g {
-		fehler(w, http.StatusTooManyRequests, "Zu viele Fehlversuche — noch "+rest.String()+" gesperrt")
+	v, grund := s.versuchBeginnen(r)
+	if v == nil {
+		fehler(w, http.StatusTooManyRequests, grund)
 		return
 	}
+	defer v.abbrechen()
 	var z zugangsdaten
 	if err := lesen(r, &z); err != nil {
 		fehler(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	var err error
-	s.mitArgon(func() { err = s.tr.Anmelden(strings.TrimSpace(z.Benutzer), z.Passwort) })
+	if e := s.mitArgon(r.Context(), func() { err = s.tr.Anmelden(strings.TrimSpace(z.Benutzer), z.Passwort) }); e != nil {
+		argonFehler(w, e)
+		return
+	}
 	if errors.Is(err, vault.ErrNichtAngelegt) {
 		fehler(w, http.StatusConflict, err.Error())
 		return
 	}
 	if err != nil {
-		s.fehlversuch(r)
-		log.Printf("Fehlgeschlagene Anmeldung von %s", clientIP(r))
+		v.falsch()
+		log.Printf("Fehlgeschlagene Anmeldung von %s", s.clientIP(r))
 		fehler(w, http.StatusUnauthorized, err.Error())
 		return
 	}
-	s.erfolg(r)
-	log.Printf("Anmeldung von %s", clientIP(r))
+	v.richtig()
+	log.Printf("Anmeldung von %s", s.clientIP(r))
 	s.anmeldungStarten(w)
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -401,20 +637,28 @@ func (s *Server) abmelden(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) zuruecksetzen(w http.ResponseWriter, r *http.Request) {
-	if g, rest := s.gesperrt(r); g {
-		fehler(w, http.StatusTooManyRequests, "Zu viele Fehlversuche — noch "+rest.String()+" gesperrt")
+	v, grund := s.versuchBeginnen(r)
+	if v == nil {
+		fehler(w, http.StatusTooManyRequests, grund)
 		return
 	}
+	defer v.abbrechen()
 	var z zugangsdaten
 	if err := lesen(r, &z); err != nil {
 		fehler(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.kopfMu.Lock()
+	defer s.kopfMu.Unlock()
 	var kopf []byte
 	var err error
-	s.mitArgon(func() { kopf, err = s.tr.Zuruecksetzen(z.Schluessel, strings.TrimSpace(z.Benutzer), z.Passwort) })
+	if e := s.mitArgon(r.Context(), func() { kopf, err = s.tr.Zuruecksetzen(z.Schluessel, strings.TrimSpace(z.Benutzer), z.Passwort) }); e != nil {
+		argonFehler(w, e)
+		return
+	}
 	if errors.Is(err, vault.ErrSchluesselFalsch) {
-		s.fehlversuch(r)
+		v.falsch()
+		log.Printf("Zurücksetzen mit falschem Sicherheitsschlüssel von %s", s.clientIP(r))
 		fehler(w, http.StatusUnauthorized, err.Error())
 		return
 	}
@@ -423,31 +667,49 @@ func (s *Server) zuruecksetzen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.st.SetMeta(MetaTresor, kopf); err != nil {
-		fehler(w, http.StatusInternalServerError, "Speichern fehlgeschlagen: "+err.Error())
+		log.Printf("Zurücksetzen speichern: %v", err)
+		fehler(w, http.StatusInternalServerError, "Speichern fehlgeschlagen")
 		return
 	}
-	s.erfolg(r)
-	log.Printf("Passwort mit Sicherheitsschlüssel zurückgesetzt (von %s)", clientIP(r))
+	v.richtig()
+	log.Printf("Passwort mit Sicherheitsschlüssel zurückgesetzt (von %s)", s.clientIP(r))
 	s.alleAbmelden()
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 func (s *Server) passwortAendern(w http.ResponseWriter, r *http.Request) {
+	v, grund := s.versuchBeginnen(r)
+	if v == nil {
+		fehler(w, http.StatusTooManyRequests, grund)
+		return
+	}
+	defer v.abbrechen()
 	var p struct{ Alt, Neu string }
 	if err := lesen(r, &p); err != nil {
 		fehler(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.kopfMu.Lock()
+	defer s.kopfMu.Unlock()
 	var kopf []byte
 	var err error
-	s.mitArgon(func() { kopf, err = s.tr.PasswortAendern(p.Alt, p.Neu) })
+	if e := s.mitArgon(r.Context(), func() { kopf, err = s.tr.PasswortAendern(p.Alt, p.Neu) }); e != nil {
+		argonFehler(w, e)
+		return
+	}
+	if errors.Is(err, vault.ErrAltFalsch) {
+		v.falsch()
+		log.Printf("Passwort ändern mit falschem bisherigem Passwort von %s", s.clientIP(r))
+	}
 	if err != nil {
 		fehler(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if err := s.st.SetMeta(MetaTresor, kopf); err != nil {
-		fehler(w, http.StatusInternalServerError, "Speichern fehlgeschlagen: "+err.Error())
+		log.Printf("Passwort ändern speichern: %v", err)
+		fehler(w, http.StatusInternalServerError, "Speichern fehlgeschlagen")
 		return
 	}
+	v.richtig()
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
 }

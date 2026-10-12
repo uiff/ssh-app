@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -33,6 +34,7 @@ type Host struct {
 	Tags       []string `json:"tags"`
 	PfadFolgen bool     `json:"pfadFolgen"`
 	Notiz      string   `json:"notiz"`
+	Geraet     string   `json:"geraet"` // Geraetetyp (ids aus web/static/js/geraete.js, '' = Allgemein)
 }
 
 // Zugang = Benutzername plus Passwort und/oder privater Schluessel.
@@ -80,12 +82,20 @@ CREATE TABLE IF NOT EXISTS host (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, adresse TEXT NOT NULL, port INTEGER NOT NULL DEFAULT 22,
   benutzer TEXT NOT NULL DEFAULT '', ordner_id INTEGER NOT NULL DEFAULT 0, zugang_id INTEGER NOT NULL DEFAULT 0,
   jump_id INTEGER NOT NULL DEFAULT 0, farbe TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '',
-  pfad_folgen INTEGER NOT NULL DEFAULT 1, notiz TEXT NOT NULL DEFAULT '');
+  pfad_folgen INTEGER NOT NULL DEFAULT 1, notiz TEXT NOT NULL DEFAULT '', geraet TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS bekannt (ziel TEXT PRIMARY KEY, typ TEXT NOT NULL, schluessel TEXT NOT NULL, fingerprint TEXT NOT NULL, seit INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS snippet (id INTEGER PRIMARY KEY, name TEXT NOT NULL, befehl TEXT NOT NULL, beschreibung TEXT NOT NULL DEFAULT '');
 `
 
+// Spalten, die spaeter dazukamen: bei aelteren Datenbanken nachruesten.
+var nachruesten = []struct{ tabelle, spalte, def string }{
+	{"host", "geraet", `TEXT NOT NULL DEFAULT ''`},
+}
+
 func Oeffnen(pfad string) (*Store, error) {
+	if err := dateiSchuetzen(pfad); err != nil {
+		return nil, err
+	}
 	db, err := sql.Open("sqlite", "file:"+pfad+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, err
@@ -95,7 +105,55 @@ func Oeffnen(pfad string) (*Store, error) {
 		db.Close()
 		return nil, fmt.Errorf("Schema anlegen: %w", err)
 	}
+	for _, n := range nachruesten {
+		if err := spalteNachruesten(db, n.tabelle, n.spalte, n.def); err != nil {
+			db.Close()
+			return nil, fmt.Errorf("Datenbank nachrüsten (%s.%s): %w", n.tabelle, n.spalte, err)
+		}
+	}
 	return &Store{db: db}, nil
+}
+
+// dateiSchuetzen legt die Datenbank nur fuer den eigenen Benutzer lesbar an (0600)
+// und zieht die Rechte vorhandener Dateien nach. SQLite uebernimmt die Rechte der
+// Datenbank fuer -wal und -shm.
+func dateiSchuetzen(pfad string) error {
+	f, err := os.OpenFile(pfad, os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("Datenbankdatei %s: %w", pfad, err)
+	}
+	f.Close()
+	for _, endung := range []string{"", "-wal", "-shm"} {
+		if fi, err := os.Stat(pfad + endung); err == nil && fi.Mode().Perm()&0o077 != 0 {
+			if err := os.Chmod(pfad+endung, 0o600); err != nil {
+				return fmt.Errorf("Rechte von %s: %w", pfad+endung, err)
+			}
+		}
+	}
+	return nil
+}
+
+func spalteNachruesten(db *sql.DB, tabelle, spalte, def string) error {
+	rows, err := db.Query(`SELECT name FROM pragma_table_info(?)`, tabelle)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return err
+		}
+		if name == spalte {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	rows.Close()
+	_, err = db.Exec(`ALTER TABLE ` + tabelle + ` ADD COLUMN ` + spalte + ` ` + def)
+	return err
 }
 
 func (s *Store) Close() error { return s.db.Close() }
@@ -165,13 +223,13 @@ func (s *Store) OrdnerLoeschen(id int64) error {
 
 // --- Hosts ---
 
-const hostSpalten = `id,name,adresse,port,benutzer,ordner_id,zugang_id,jump_id,farbe,tags,pfad_folgen,notiz`
+const hostSpalten = `id,name,adresse,port,benutzer,ordner_id,zugang_id,jump_id,farbe,tags,pfad_folgen,notiz,geraet`
 
 func scanHost(sc interface{ Scan(...any) error }) (Host, error) {
 	var h Host
 	var tags string
 	var folgen int
-	err := sc.Scan(&h.ID, &h.Name, &h.Adresse, &h.Port, &h.Benutzer, &h.OrdnerID, &h.ZugangID, &h.JumpID, &h.Farbe, &tags, &folgen, &h.Notiz)
+	err := sc.Scan(&h.ID, &h.Name, &h.Adresse, &h.Port, &h.Benutzer, &h.OrdnerID, &h.ZugangID, &h.JumpID, &h.Farbe, &tags, &folgen, &h.Notiz, &h.Geraet)
 	h.Tags = splitTags(tags)
 	h.PfadFolgen = folgen != 0
 	return h, err
@@ -206,16 +264,46 @@ func (s *Store) HostSpeichern(h *Host) error {
 	if h.Port == 0 {
 		h.Port = 22
 	}
-	args := []any{h.Name, h.Adresse, h.Port, h.Benutzer, h.OrdnerID, h.ZugangID, h.JumpID, h.Farbe, joinTags(h.Tags), b2i(h.PfadFolgen), h.Notiz}
+	args := []any{h.Name, h.Adresse, h.Port, h.Benutzer, h.OrdnerID, h.ZugangID, h.JumpID, h.Farbe, joinTags(h.Tags), b2i(h.PfadFolgen), h.Notiz, h.Geraet}
 	if h.ID == 0 {
-		r, err := s.db.Exec(`INSERT INTO host(name,adresse,port,benutzer,ordner_id,zugang_id,jump_id,farbe,tags,pfad_folgen,notiz) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, args...)
+		r, err := s.db.Exec(`INSERT INTO host(name,adresse,port,benutzer,ordner_id,zugang_id,jump_id,farbe,tags,pfad_folgen,notiz,geraet) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, args...)
 		if err != nil {
 			return err
 		}
 		h.ID, _ = r.LastInsertId()
 		return nil
 	}
-	return mussTreffen(s.db.Exec(`UPDATE host SET name=?,adresse=?,port=?,benutzer=?,ordner_id=?,zugang_id=?,jump_id=?,farbe=?,tags=?,pfad_folgen=?,notiz=? WHERE id=?`, append(args, h.ID)...))
+	return mussTreffen(s.db.Exec(`UPDATE host SET name=?,adresse=?,port=?,benutzer=?,ordner_id=?,zugang_id=?,jump_id=?,farbe=?,tags=?,pfad_folgen=?,notiz=?,geraet=? WHERE id=?`, append(args, h.ID)...))
+}
+
+// HostZugangSetzen legt einen Zugang an und haengt ihn an den Host (eine Transaktion).
+func (s *Store) HostZugangSetzen(hostID int64, z *Zugang) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	r, err := tx.Exec(`INSERT INTO zugang(name,benutzer,art,oeffentlich,fingerprint,schluessel_typ,passwort_enc,schluessel_enc,passphrase_enc) VALUES(?,?,?,?,?,?,?,?,?)`,
+		z.Name, z.Benutzer, z.Art, z.Oeffentlich, z.Fingerprint, z.SchluesselTyp, z.PasswortEnc, z.SchluesselEnc, z.PassphraseEnc)
+	if err != nil {
+		return err
+	}
+	id, _ := r.LastInsertId()
+	if err := mussTreffen(tx.Exec(`UPDATE host SET zugang_id=? WHERE id=?`, id, hostID)); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	z.ID = id
+	z.HatPasswort, z.HatPassphrase = len(z.PasswortEnc) > 0, len(z.PassphraseEnc) > 0
+	return nil
+}
+
+// HostBenutzerSetzen traegt den Benutzer ein, wenn der Host noch keinen hat.
+func (s *Store) HostBenutzerSetzen(hostID int64, benutzer string) error {
+	_, err := s.db.Exec(`UPDATE host SET benutzer=? WHERE id=? AND benutzer=''`, benutzer, hostID)
+	return err
 }
 
 func (s *Store) HostLoeschen(id int64) error {

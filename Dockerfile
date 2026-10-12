@@ -1,7 +1,14 @@
 # syntax=docker/dockerfile:1
 # ssh-app — ein statisches Go-Programm in einem minimalen Image (ohne Shell).
-# Baut fuer die Zielplattform per Cross-Compile, also auch arm64 ohne QEMU:
-#   docker buildx build --platform linux/amd64,linux/arm64 -t ssh-app .
+# Uebersetzt per Cross-Compile fuer die Zielplattform, also auch arm64 ohne QEMU.
+#   Auf dem Zielgeraet selbst (Plattform automatisch):  docker compose up -d --build
+#   Fuer ein anderes Geraet (eine Plattform, landet im lokalen Image-Speicher):
+#     docker buildx build --platform linux/arm64 -t ssh-app --load .
+#   Mehrere Plattformen auf einmal brauchen einen buildx-Builder mit Treiber
+#   docker-container (der Standard-Builder kann das nur mit containerd-Image-Speicher)
+#   und eine Registry als Ziel:
+#     docker buildx create --name ssh-app-bau --driver docker-container --use
+#     docker buildx build --platform linux/amd64,linux/arm64 -t <registry>/ssh-app:<version> --push .
 
 ARG GO_VERSION=1.26
 
@@ -21,16 +28,23 @@ RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
  && mkdir -p /out/data
 
 # --- 2. Befehlshilfe (tldr-pages, CC BY 4.0) holen und pruefen -------------
+# Quelle ist ein fester Commit des tldr-Repositorys. Die Release-Archive von tldr-pages
+# werden laufend unter gleichem Namen neu hochgeladen, eine Pruefsumme darauf hielte nur
+# wenige Tage. Geprueft wird der Inhalt (alle Seiten und LICENSE.md), nicht das tar.gz.
+# Neuer Stand: TLDR_COMMIT setzen, bauen, die gemeldete Ist-Pruefsumme eintragen.
 FROM --platform=$BUILDPLATFORM alpine:3.22 AS hilfe
-ARG TLDR_VERSION=v2.3
-ARG TLDR_DE_SHA256=cd0813c39958bfff092ab8269b27146b32361443b2dfe0856602aae31d8c77d6
-ARG TLDR_EN_SHA256=286138f1b5fd7cc645acf0bba3d70ca48594c7695efc5f72e34017d50a47b777
-WORKDIR /hilfe
-RUN apk add --no-cache curl \
- && curl -fsSL -o tldr-pages.de.zip https://github.com/tldr-pages/tldr/releases/download/${TLDR_VERSION}/tldr-pages.de.zip \
- && curl -fsSL -o tldr-pages.en.zip https://github.com/tldr-pages/tldr/releases/download/${TLDR_VERSION}/tldr-pages.en.zip \
- && echo "${TLDR_DE_SHA256}  tldr-pages.de.zip" | sha256sum -c - \
- && echo "${TLDR_EN_SHA256}  tldr-pages.en.zip" | sha256sum -c -
+ARG TLDR_COMMIT=d5f8a8f335f6b534a980958218e83100d74c772c
+ARG TLDR_INHALT_SHA256=f7a3b0d5dd74f1fec2adff23229fda74075140d136d94f15e9da1aaedd9f1b21
+WORKDIR /quelle
+RUN apk add --no-cache curl zip \
+ && curl -fsSL https://github.com/tldr-pages/tldr/archive/${TLDR_COMMIT}.tar.gz \
+    | tar -xz --strip-components=1 tldr-${TLDR_COMMIT}/LICENSE.md tldr-${TLDR_COMMIT}/pages tldr-${TLDR_COMMIT}/pages.de \
+ && ist=$(find LICENSE.md pages pages.de -type f -exec sha256sum {} + | sort | sha256sum | cut -d' ' -f1) \
+ && if [ "$ist" != "${TLDR_INHALT_SHA256}" ]; then echo "tldr-pages: Pruefsumme $ist statt ${TLDR_INHALT_SHA256}" >&2; exit 1; fi \
+ && mkdir /hilfe \
+ && cp LICENSE.md pages/ && cp LICENSE.md pages.de/ \
+ && (cd pages && zip -qrX /hilfe/tldr-pages.en.zip .) \
+ && (cd pages.de && zip -qrX /hilfe/tldr-pages.de.zip .)
 
 # --- 3. Laufzeit: distroless, laeuft als Benutzer «nonroot» (65532) --------
 FROM gcr.io/distroless/static-debian12:nonroot
@@ -41,6 +55,8 @@ LABEL org.opencontainers.image.title="ssh-app" \
       org.opencontainers.image.licenses="MIT"
 COPY --from=bau /out/ssh-app /app/ssh-app
 COPY --from=hilfe /hilfe /app/hilfe
+# Lizenzhinweise (die Texte der Drittsoftware sind zusaetzlich ins Programm eingebettet: /vendor/licenses/)
+COPY LICENSE NOTICE /app/
 COPY --from=bau --chown=65532:65532 /out/data /data
 ENV SSHAPP_DATA=/data \
     SSHAPP_HILFE=/app/hilfe \

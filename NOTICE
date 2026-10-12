@@ -2,16 +2,85 @@ ssh-app
 Copyright (c) 2026 IoTUeli (https://iotueli.ch) — MIT-Lizenz, siehe LICENSE.
 Name und Logo «IoTUeli» sind Kennzeichen von IoTUeli und nicht Teil der MIT-Lizenz.
 
-Mitgelieferte Drittsoftware und Daten (Lizenztexte unter web/static/vendor/licenses/):
+Die Lizenztexte der Drittsoftware liegen unter web/static/vendor/licenses/ und sind ins
+Programm eingebettet: in der App unter Einstellungen › Über › «Lizenzen» (Pfad /vendor/licenses/).
+Das Container-Image enthält zusätzlich LICENSE und NOTICE unter /app/.
 
-- xterm.js und Addons fit, web-links, search, unicode11 — MIT, Copyright The xterm.js authors
-- IBM Plex Sans — SIL Open Font License 1.1, Copyright IBM Corp.
-- JetBrains Mono — SIL Open Font License 1.1, Copyright The JetBrains Mono Project Authors
-- tldr-pages (Befehlshilfe, wird beim Bau des Containers geladen) — Creative Commons
-  Attribution 4.0 International (CC BY 4.0), https://github.com/tldr-pages/tldr
+In der Oberfläche (mitgeliefert unter web/static/vendor/)
+-----------------------------------------------------------
+- xterm.js — MIT
+  Copyright (c) 2017-2019 The xterm.js authors, Copyright (c) 2014-2016 SourceLair Private Company
+  Text: xterm.LICENSE
+- xterm.js-Addons fit, web-links, search, unicode11 — MIT
+  Copyright (c) 2017, 2019 The xterm.js authors
+  Text: xterm-addon-fit.LICENSE, xterm-addon-web-links.LICENSE, xterm-addon-search.LICENSE,
+        xterm-addon-unicode11.LICENSE
+- IBM Plex Sans — SIL Open Font License 1.1
+  Copyright 2019 IBM Corp.
+  Text: ibm-plex-sans.LICENSE
+- JetBrains Mono — SIL Open Font License 1.1
+  Copyright 2020 The JetBrains Mono Project Authors
+  Text: jetbrains-mono.LICENSE
 
-Go-Bibliotheken (werden ins Programm uebersetzt):
-- golang.org/x/crypto — BSD-3-Clause, Copyright The Go Authors
-- github.com/pkg/sftp — BSD-2-Clause, Copyright Dave Cheney und Mitwirkende
-- github.com/coder/websocket — ISC, Copyright Coder
-- modernc.org/sqlite — BSD-3-Clause, Copyright The Sqlite Authors
+Im Programm (Go, statisch gelinkt; dieselbe Liste zeigt «go version -m ssh-app»)
+-----------------------------------------------------------------------------------
+- Go-Standardbibliothek — BSD-3-Clause
+  Copyright 2009 The Go Authors
+  Text: go-standardbibliothek.LICENSE
+- golang.org/x/crypto v0.58.0 — BSD-3-Clause
+  Copyright 2009 The Go Authors
+  Text: go-golang.org-x-crypto.LICENSE
+- golang.org/x/sys v0.49.0 — BSD-3-Clause
+  Copyright 2009 The Go Authors
+  Text: go-golang.org-x-sys.LICENSE
+- github.com/pkg/sftp v1.13.11 — BSD-2-Clause
+  Copyright (c) 2013 Dave Cheney
+  Text: go-github.com-pkg-sftp.LICENSE
+- github.com/kr/fs v0.1.0 — BSD-3-Clause
+  Copyright (c) 2012 The Go Authors
+  Text: go-github.com-kr-fs.LICENSE
+- github.com/coder/websocket v1.8.15 — ISC
+  Copyright (c) 2025 Coder
+  Text: go-github.com-coder-websocket.LICENSE
+- modernc.org/sqlite v1.60.1 — BSD-3-Clause
+  Copyright (c) 2017 The Sqlite Authors
+  Enthält SQLite, das gemeinfrei ist.
+  Text: go-modernc.org-sqlite.LICENSE, go-modernc.org-sqlite.LICENSE-SQLITE
+- modernc.org/libc v1.77.1 — BSD-3-Clause
+  Copyright (c) 2017 The Libc Authors
+  Enthält nach Go übertragene Teile der musl libc (MIT, Copyright (c) 2005-2020 Rich Felker et al.),
+  der Go-Standardbibliothek (BSD-3-Clause, Copyright (c) 2009 The Go Authors), von go-netdb
+  (MIT, Copyright (c) 2012 Dominik Honnef) und von NixOS/nixpkgs (MIT, Copyright (c) 2003-2025
+  Eelco Dolstra and the Nixpkgs/NixOS contributors).
+  Text: go-modernc.org-libc.LICENSE, go-modernc.org-libc.LICENSE-3RD-PARTY
+- modernc.org/memory v1.12.1 — BSD-3-Clause
+  Copyright (c) 2017 The Memory Authors
+  Enthält Teile von mmap-go (BSD-3-Clause, Copyright (c) 2011 Evan Shaw) und der
+  Go-Standardbibliothek (BSD-3-Clause, Copyright (c) 2009 The Go Authors).
+  Text: go-modernc.org-memory.LICENSE, go-modernc.org-memory.LICENSE-MMAP-GO,
+        go-modernc.org-memory.LICENSE-GO
+- modernc.org/mathutil v1.7.1 — BSD-3-Clause
+  Copyright (c) 2014 The mathutil Authors
+  Text: go-modernc.org-mathutil.LICENSE
+- github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec — BSD-3-Clause
+  Copyright (c) 2012 The Go Authors
+  Text: go-github.com-remyoudompheng-bigfft.LICENSE
+- github.com/google/uuid v1.6.0 — BSD-3-Clause
+  Copyright (c) 2009, 2014 Google Inc.
+  Text: go-github.com-google-uuid.LICENSE
+- github.com/dustin/go-humanize v1.0.1 — MIT
+  Copyright (c) 2005-2008 Dustin Sallings
+  Text: go-github.com-dustin-go-humanize.LICENSE
+
+Daten
+-----
+- tldr-pages (Befehlshilfe) — Creative Commons Attribution 4.0 International (CC BY 4.0)
+  Copyright 2014 bis heute das tldr-pages-Team und Mitwirkende, https://github.com/tldr-pages/tldr
+  Beim Bau des Containers werden die Seiten (Ordner pages und pages.de) unverändert aus einem
+  festen Stand des tldr-Repositorys geladen (TLDR_COMMIT im Dockerfile) und mit dem
+  Lizenzhinweis LICENSE.md zu tldr-pages.en.zip und tldr-pages.de.zip gepackt.
+  Text: tldr-pages.LICENSE (diese LICENSE.md unverändert, davor eine Zeile zur Herkunft)
+
+Nach einem Update der Go-Bibliotheken diese Liste und die Lizenztexte nachführen. Welche Module
+ins Programm gelangen, zeigt:
+  go list -deps -f '{{with .Module}}{{.Path}}@{{.Version}}{{end}}' ./cmd/ssh-app | sort -u

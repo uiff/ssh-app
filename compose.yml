@@ -1,5 +1,6 @@
 # ssh-app starten:   docker compose up -d --build
-# Danach im Browser: https://<adresse-dieses-rechners>:8443
+# Danach im Browser: https://<adresse-dieses-rechners>:8443 — und gleich einrichten:
+# bis dahin kann jeder, der die Adresse erreicht, das Konto anlegen.
 services:
   ssh-app:
     build: .
@@ -8,14 +9,18 @@ services:
     restart: unless-stopped
     ports:
       - "8443:8443"
+      # Hinter einem Reverse-Proxy auf demselben Rechner stattdessen nur lokal:
+      # - "127.0.0.1:8080:8080"
     volumes:
       - ssh-app-daten:/data
     environment:
-      # Minuten ohne Bedienung, bis der Tresor sich sperrt
+      # Minuten ohne Bedienung, bis die Anmeldung abläuft und der Tresor sich sperrt
       SSHAPP_LEERLAUF_MIN: "30"
-      # Hinter einem Reverse-Proxy mit eigenem Zertifikat: SSHAPP_TLS "aus" und SSHAPP_COOKIE_SECURE "1"
+      # Hinter einem Reverse-Proxy mit eigenem Zertifikat (siehe README «Betrieb hinter einem Reverse-Proxy»):
+      # SSHAPP_ADDR: ":8080"
       # SSHAPP_TLS: "aus"
       # SSHAPP_COOKIE_SECURE: "1"
+      # SSHAPP_PROXY: "172.16.0.0/12"
     stop_grace_period: 10s
     read_only: true
     tmpfs:

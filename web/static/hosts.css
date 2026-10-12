@@ -1,0 +1,159 @@
+/* Seitenleiste (Hosts, Tresor, Snippets), Host-Dialog und Geraetetypen.
+   Laedt nach app.css und nutzt deren Farben und Masse. */
+
+/* ---------- Reiterzeile ----------
+   Hoehe und Trennlinie kommen aus app.css (.reiter: genau --leiste hoch, V8). Hier nur das Aussehen. */
+.seite.links .reiter { padding: 0 4px; }
+.seite.links .reiter button { font-size: 14px; }
+.seite.links .reiter button:hover { color: var(--text2); }
+.seite.links .reiter button[aria-selected=true] { color: var(--text); }
+.seite.links .reiter button:focus-visible { outline-offset: -3px; border-radius: 6px; }
+
+/* ---------- Filter und Plus ---------- */
+.leiste-suche { display: flex; align-items: center; gap: 8px; padding: 12px 10px 8px 12px; }
+.suchfeld { position: relative; flex: 1; min-width: 0; display: block; }
+.suchfeld svg.ic { position: absolute; left: 12px; top: 50%; margin-top: -8px; color: var(--leise); pointer-events: none; }
+.suchfeld input { padding-left: 36px; }
+.suchfeld input::placeholder { color: var(--leise); }
+.plus-knopf { border: 1px solid var(--linie); color: var(--text); }
+.plus-knopf:hover { border-color: var(--linie2); }
+
+/* ---------- Liste: Ordnerkopf und Zeilen ----------
+   Alle Zeilen beginnen bei 14 px; Chevron und Symbolfeld sind gleich breit (34 px),
+   damit Ordnername und Hostname auf derselben Kante stehen. */
+.host-liste { display: flex; flex-direction: column; gap: 2px; padding: 0 6px 12px; }
+.ordner-kopf { display: flex; align-items: center; min-height: 44px; margin-top: 8px; }
+.ordner-kopf:first-child { margin-top: 0; }
+.ordner-knopf { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 0 8px; border-radius: 8px; color: var(--text2); font-size: 13px; font-weight: 600; text-align: left; }
+.ordner-knopf:hover { color: var(--text); }
+.ordner-knopf .chevron { width: 34px; flex: none; display: inline-flex; justify-content: center; color: var(--leise); }
+.ordner-knopf .chevron svg { transition: transform .15s ease; }
+.ordner-knopf[aria-expanded=true] .chevron svg { transform: rotate(90deg); }
+.ordner-knopf .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ordner-knopf .anz { flex: none; font-size: 12px; font-weight: 500; color: var(--leise); font-variant-numeric: tabular-nums; }
+.ordner-mehr { color: var(--leise); }
+.ordner-leer { padding: 2px 8px 10px 52px; font-size: 12.5px; line-height: 1.45; color: var(--leise); }
+
+.host-zeile { display: flex; align-items: center; border-radius: 10px; }
+.host-zeile:hover { background: var(--flaeche2); }
+.host-zeile.aktiv { background: var(--wahl); }
+.host-zeile > .zeile { flex: 1; min-width: 0; gap: 10px; min-height: 52px; padding: 6px 4px 6px 8px; border-radius: 10px; background: none; }
+.host-zeile > .zeile:hover { background: none; }
+.host-zeile .haupt b { font-size: 14.5px; }
+.host-zeile .haupt small { font-size: 12px; }
+.host-zeile .bearbeiten { color: var(--leise); }
+.host-zeile .bearbeiten:hover { color: var(--text); background: var(--wahl); }
+/* Desktop mit Maus: Stift erst beim Ueberfahren oder mit Tastaturfokus. Touch: immer sichtbar. */
+@media (hover: hover) and (pointer: fine) {
+  .host-zeile .bearbeiten { opacity: 0; transition: opacity .12s ease; }
+  .host-zeile:hover .bearbeiten, .host-zeile:focus-within .bearbeiten { opacity: 1; }
+}
+
+/* Rundes Feld mit Geraete-Symbol; Punkt unten rechts = verbunden. */
+.geraet-feld { position: relative; flex: none; width: 34px; height: 34px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; background: var(--flaeche2); border: 1px solid var(--linie); color: var(--text2); }
+.geraet-feld svg.ic { width: 18px; height: 18px; stroke-width: 1.8; }
+.geraet-feld[data-farbe] { color: var(--hostfarbe); border-color: color-mix(in srgb, var(--hostfarbe) 45%, var(--linie)); background: color-mix(in srgb, var(--hostfarbe) 12%, var(--flaeche)); }
+.geraet-feld.gross { width: 48px; height: 48px; }
+.geraet-feld.gross svg.ic { width: 24px; height: 24px; }
+.geraet-feld.art-schluessel { color: var(--akzent); }
+.geraet-feld.art-passwort { color: var(--gut); }
+.host-zeile:hover .geraet-feld { border-color: var(--linie2); }
+.status-punkt { position: absolute; right: -2px; bottom: -2px; width: 12px; height: 12px; border-radius: 50%; background: var(--gut); border: 2px solid #12151B; }
+.host-zeile:hover .status-punkt { border-color: var(--flaeche2); }
+.host-zeile.aktiv .status-punkt { border-color: var(--wahl); }
+
+/* Leere Liste, Abschnitte (Tresor, Snippets) */
+.leiste-leer { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 36px 20px; text-align: center; }
+.leiste-leer .geraet-feld { margin-bottom: 4px; color: var(--akzent); background: var(--akzent-grund); border-color: transparent; }
+.leiste-leer b { font-size: 15px; }
+.leiste-leer p { margin: 0 0 8px; color: var(--leise); font-size: 13.5px; line-height: 1.55; }
+.leiste-knoepfe { display: flex; flex-direction: column; gap: 8px; padding: 12px; }
+.abschnitt { display: flex; align-items: center; gap: 8px; padding: 10px 14px 6px; color: var(--leise); font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.abschnitt .anz { font-weight: 500; letter-spacing: 0; font-variant-numeric: tabular-nums; }
+.tresor-hinweis { margin: 14px 12px; }
+
+/* ---------- Host-Dialog ---------- */
+.host-form { display: flex; flex-direction: column; gap: 18px; }
+.host-form .meldung { overflow-wrap: anywhere; }
+.host-form input[aria-invalid=true] { border-color: var(--fehler); }
+
+/* Geraetetyp: Knopf mit gewaehltem Symbol, darunter das Raster */
+.gw-knopf { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 64px; padding: 7px 14px 7px 7px; border: 1px solid var(--linie); border-radius: 12px; background: var(--grund); text-align: left; }
+.gw-knopf:hover { border-color: var(--linie2); }
+.gw-knopf[aria-expanded=true] { border-color: var(--akzent); }
+.gw-knopf .geraet-feld { color: var(--akzent); background: var(--akzent-grund); border-color: transparent; }
+.gw-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.gw-label { font-size: 12.5px; color: var(--leise); }
+.gw-name { font-weight: 600; line-height: 1.3; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.gw-aendern { flex: none; display: inline-flex; align-items: center; gap: 4px; color: var(--akzent); font-size: 14px; font-weight: 500; }
+.gw-aendern .chevron { display: inline-flex; }
+.gw-aendern .chevron svg { transform: rotate(90deg); transition: transform .15s ease; }
+.gw-knopf[aria-expanded=true] .gw-aendern .chevron svg { transform: rotate(-90deg); }
+.gw-raster { display: flex; flex-direction: column; gap: 14px; margin-top: 12px; }
+.gw-gruppe-titel { margin-bottom: 6px; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--leise); }
+.gw-kacheln { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; }
+.gw-kachel { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 72px; padding: 8px 6px; border: 1px solid var(--linie); border-radius: 10px; background: var(--grund); color: var(--text2); font-size: 12px; line-height: 1.25; text-align: center; }
+.gw-kachel span { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; overflow-wrap: anywhere; }
+.gw-kachel:hover { border-color: var(--linie2); color: var(--text); }
+.gw-kachel[aria-pressed=true] { border-color: var(--akzent); background: var(--akzent-grund); color: var(--text); }
+.gw-kachel[aria-pressed=true] svg.ic { color: var(--akzent); }
+
+/* Passwort mit Auge und Haken */
+.pw-feld { position: relative; }
+.pw-feld input { padding-right: 48px; }
+.pw-feld input:disabled { opacity: .6; }
+.pw-zeigen { position: absolute; right: 0; top: 0; width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--leise); }
+.pw-zeigen:hover { color: var(--text); }
+.pw-zeigen:disabled { opacity: .4; cursor: default; }
+.check.pw-merken { align-items: center; min-height: 44px; padding: 0; font-size: 14px; }
+.check.pw-merken .leise { color: var(--leise); }
+.check.pw-merken + .hinweis { margin-top: -4px; }
+.loeschen-telefon { padding-top: 14px; border-top: 1px solid var(--linie); }
+
+/* Anmeldung ueber einen Zugang aus dem Tresor */
+.zugang-info { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 6px 6px 6px 8px; border: 1px solid var(--linie); border-radius: 8px; background: var(--grund); }
+.zugang-info .geraet-feld { width: 32px; height: 32px; }
+.zugang-info .haupt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.zugang-info .haupt b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.zugang-info .haupt small { font-size: 12.5px; color: var(--leise); }
+
+/* Erweitert */
+.erweitert-teil { border-top: 1px solid var(--linie); }
+.erweitert-knopf { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 56px; padding: 8px 2px; text-align: left; }
+.erweitert-knopf .chevron { display: inline-flex; color: var(--leise); flex: none; }
+.erweitert-knopf .chevron svg { transition: transform .15s ease; }
+.erweitert-knopf[aria-expanded=true] .chevron svg { transform: rotate(90deg); }
+.erw-titel { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.erw-titel b { font-weight: 600; }
+.erw-titel small { font-size: 12.5px; color: var(--leise); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.erweitert { display: flex; flex-direction: column; gap: 16px; padding: 4px 0 6px; }
+.erweitert .check { padding: 4px 0; }
+.check-hinweis { color: var(--leise); font-size: 13px; }
+.host-form textarea.notiz { min-height: 70px; font-family: var(--sans); font-size: 15px; }
+
+/* Farbwahl: 44-px-Ziele mit rundem Farbpunkt */
+.farbwahl { display: flex; flex-wrap: wrap; gap: 2px; margin-left: -8px; }
+.farbknopf { width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; border-radius: 50%; }
+.farbpunkt { width: 28px; height: 28px; border-radius: 50%; flex: none; }
+.farbpunkt.ohne { border: 2px dashed var(--linie2); }
+.farbknopf[aria-pressed=true] .farbpunkt { box-shadow: 0 0 0 2px var(--flaeche), 0 0 0 4px var(--text); }
+
+/* ---------- Zugang-Dialog ---------- */
+.fp-hinweis, .zugang-dialog .fp { overflow-wrap: anywhere; word-break: break-all; }
+
+/* ---------- Einstellungen: Akzentfarbe ---------- */
+.akzente { display: flex; flex-wrap: wrap; gap: 8px; }
+.akzent-knopf { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px 0 10px; border: 1px solid var(--linie); border-radius: 22px; color: var(--text2); font-size: 14px; }
+.akzent-knopf:hover { border-color: var(--linie2); color: var(--text); }
+.akzent-knopf .farbpunkt { width: 20px; height: 20px; }
+.akzent-knopf[aria-pressed=true] { border-color: var(--text2); background: var(--flaeche2); color: var(--text); font-weight: 600; }
+.akzent-knopf[aria-pressed=true] .farbpunkt { box-shadow: 0 0 0 2px var(--flaeche2), 0 0 0 3.5px var(--text); }
+.schrift-feld { max-width: 220px; }
+
+/* ---------- Telefon ---------- */
+@media (max-width: 899px) {
+  .host-zeile > .zeile { min-height: 56px; }
+  .leiste-suche { padding: 12px 10px 8px 12px; }
+  .gw-kacheln { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .erweitert .raster2 { gap: 16px; }
+}

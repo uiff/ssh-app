@@ -23,16 +23,17 @@ App.zugangBearbeiten = function (z) {
     schluessel.value = await f.text();
   } });
 
+  // Oeffentlicher Schluessel: lange Zeichenketten ohne Trennstelle umbrechen (Telefon).
   const oeffentlich = z.oeffentlich ? el('div', { class: 'feld' },
     el('span', { class: 'label' }, 'Öffentlicher Schlüssel'),
     el('div', { class: 'fp', style: { fontSize: '12px' } }, z.oeffentlich),
-    el('div', { class: 'hinweis' }, (z.schluesselTyp || '') + ' · ' + (z.fingerprint || '')),
-    el('div', { class: 'reihe' },
+    el('div', { class: 'hinweis fp-hinweis' }, (z.schluesselTyp || '') + ' · ' + (z.fingerprint || '')),
+    el('div', { class: 'reihe', style: { gap: '8px' } },
       el('button', { class: 'btn klein', type: 'button', onclick: () => kopieren(z.oeffentlich) }, icon('kopieren'), 'Kopieren'),
-      el('button', { class: 'btn klein', type: 'button', onclick: () => schluesselInstallieren(z) }, icon('hoch'), 'Auf Host eintragen'),
+      el('button', { class: 'btn klein', type: 'button', onclick: () => schluesselInstallieren(z) }, icon('hoch'), 'Auf einem Host eintragen'),
       el('button', { class: 'btn klein', type: 'button', onclick: async () => {
         if (await frage('Den privaten Schlüssel unverschlüsselt herunterladen? Die Datei gibt Zugang zu allen Hosts mit diesem Schlüssel.', { ja: 'Herunterladen', gefahr: true })) herunterladen('/api/zugaenge/' + z.id + '/privat');
-      } }, icon('runter'), 'Privaten exportieren'))) : null;
+      } }, icon('runter'), 'Privaten Schlüssel herunterladen'))) : null;
 
   const speichern = async () => {
     const daten = { name: name.value.trim(), benutzer: benutzer.value.trim(), passwort: passwort.value, passwortEntfernen: pwWeg.checked,
@@ -46,14 +47,16 @@ App.zugangBearbeiten = function (z) {
     titel: neu ? 'Zugang anlegen' : 'Zugang bearbeiten', breit: true,
     inhalt: el('form', { onsubmit: (e) => { e.preventDefault(); speichern(); }, style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
       el('div', { class: 'raster2' }, feldMit('z-name', 'Name', name), feldMit('z-benutzer', 'Benutzer', benutzer)),
-      feldMit('z-pw', 'Passwort', passwort, z.hatPasswort ? el('label', { class: 'check', style: { minHeight: 0, padding: '4px 0' } }, pwWeg, 'Gespeichertes Passwort entfernen') : 'Wird auch für «keyboard-interactive» verwendet.'),
-      el('div', { class: 'feld' },
-        el('div', { class: 'reihe', style: { justifyContent: 'space-between' } }, el('label', { for: 'z-key' }, 'Privater Schlüssel'),
-          el('button', { class: 'btn klein', type: 'button', onclick: () => dateiWahl.click() }, icon('ordner'), 'Datei wählen')),
-        schluessel, dateiWahl,
-        z.oeffentlich ? el('label', { class: 'check', style: { minHeight: 0, padding: '4px 0' } }, keyWeg, 'Gespeicherten Schlüssel entfernen') : null),
-      feldMit('z-pp', 'Passphrase des Schlüssels', passphrase),
       oeffentlich,
+      feldMit('z-pw', 'Passwort', passwort, z.hatPasswort
+        ? el('label', { class: 'check', style: { padding: '0' } }, pwWeg, 'Gespeichertes Passwort entfernen')
+        : 'Für die Anmeldung mit Passwort. Bei einem Schlüssel leer lassen.'),
+      el('div', { class: 'feld' },
+        el('div', { class: 'reihe', style: { justifyContent: 'space-between' } }, el('label', { for: 'z-key', style: { fontSize: '13px', color: 'var(--text2)' } }, 'Privater Schlüssel'),
+          el('button', { class: 'btn klein', type: 'button', onclick: () => dateiWahl.click() }, icon('ordner'), 'Aus Datei laden')),
+        schluessel, dateiWahl,
+        z.oeffentlich ? el('label', { class: 'check', style: { padding: '0' } }, keyWeg, 'Gespeicherten Schlüssel entfernen') : null),
+      feldMit('z-pp', 'Passphrase des Schlüssels', passphrase),
       el('button', { type: 'submit', class: 'versteckt' })),
     knoepfe: [
       !neu ? el('button', { class: 'btn gefahr links', type: 'button', onclick: async () => {
@@ -61,10 +64,12 @@ App.zugangBearbeiten = function (z) {
         if (!(await frage(text, { ja: 'Löschen', gefahr: true }))) return;
         try { await api('DELETE', '/api/zugaenge/' + z.id); dlg.zu(); App.datenLaden(); } catch (e) { fehlerToast(e); }
       } }, icon('muell'), 'Löschen') : null,
-      el('button', { class: 'btn', type: 'button', onclick: () => dlg.zu() }, 'Abbrechen'),
+      // Telefon: ohne «Abbrechen» (Kreuz oben, Zurueck-Geste), damit der Fuss einzeilig bleibt.
+      el('button', { class: 'btn nur-desktop', type: 'button', onclick: () => dlg.zu() }, 'Abbrechen'),
       el('button', { class: 'btn primaer', type: 'button', onclick: speichern }, 'Speichern'),
     ],
   });
+  dlg.element.classList.add('zugang-dialog');
 };
 
 App.schluesselErzeugen = function () {
@@ -102,7 +107,7 @@ function schluesselInstallieren(z) {
   const dlg = dialog({
     titel: 'Schlüssel auf Host eintragen',
     inhalt: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
-      el('p', { style: { margin: 0, color: 'var(--text2)', lineHeight: 1.5 } }, 'Haengt den öffentlichen Schlüssel an ~/.ssh/authorized_keys an. Angemeldet wird mit dem bisherigen Zugang des Hosts. Den Host vorher einmal im Terminal verbinden, damit sein Host-Schlüssel bekannt ist.'),
+      el('p', { style: { margin: 0, color: 'var(--text2)', lineHeight: 1.5 } }, 'Hängt den öffentlichen Schlüssel an ~/.ssh/authorized_keys an. Angemeldet wird mit dem bisherigen Zugang des Hosts. Den Host vorher einmal im Terminal verbinden, damit sein Host-Schlüssel bekannt ist.'),
       feldMit('i-host', 'Host', wahl), feldMit('i-pw', 'Passwort (optional)', pw)),
     knoepfe: [el('button', { class: 'btn', type: 'button', onclick: () => dlg.zu() }, 'Abbrechen'), el('button', { class: 'btn primaer', type: 'button', onclick: los }, 'Eintragen')],
   });
@@ -148,6 +153,15 @@ App.einstellungen = function () {
   const neu2 = el('input', { id: 'e-neu2', type: 'password', autocomplete: 'new-password' });
   const schrift = el('input', { id: 'e-schrift', type: 'number', min: 9, max: 24, value: App.schriftGroesse(), inputmode: 'numeric',
     onchange: () => App.schriftSetzen(parseInt(schrift.value, 10)) });
+  // Akzentfarbe: runde Farbpunkte mit Namen, sofort wirksam und je Browser gemerkt.
+  const akzente = el('div', { class: 'akzente', role: 'group', 'aria-labelledby': 'e-akzent-label' });
+  let akzent = akzentFuer(akzentGemerkt()).id;
+  const akzenteZeichnen = () => {
+    ersetzen(akzente, AKZENTE.map((a) => el('button', { type: 'button', class: 'akzent-knopf', 'aria-pressed': a.id === akzent ? 'true' : 'false',
+      onclick: () => { akzent = akzentSetzen(a.id, true).id; akzenteZeichnen(); } },
+    el('span', { class: 'farbpunkt', style: { background: a.farbe } }), a.de)));
+  };
+  akzenteZeichnen();
   const bekannt = el('div', { style: { display: 'flex', flexDirection: 'column' } });
   const bekanntZeichnen = () => ersetzen(bekannt, ...(App.daten.bekannt.length ? App.daten.bekannt.map((b) => el('div', { class: 'zeile-wrap', style: { borderBottom: '1px solid var(--linie)' } },
     el('div', { class: 'zeile', style: { cursor: 'default' } }, el('span', { class: 'haupt' }, el('b', { class: 'mono', style: { fontSize: '13px' } }, b.ziel), el('small', null, b.typ + ' · ' + b.fingerprint))),
@@ -160,6 +174,10 @@ App.einstellungen = function () {
   dialog({
     titel: 'Einstellungen', breit: true,
     inhalt: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '18px' } },
+      el('div', { class: 'einstellungen-gruppe' },
+        el('h4', null, 'Darstellung'),
+        el('div', { class: 'feld' }, el('span', { class: 'label', id: 'e-akzent-label' }, 'Akzentfarbe'), akzente),
+        el('div', { class: 'schrift-feld' }, feldMit('e-schrift', 'Schriftgrösse im Terminal (px)', schrift))),
       el('div', { class: 'einstellungen-gruppe' },
         el('h4', null, 'Backup'),
         el('p', null, 'Die Backup-Datei enthält Hosts, Ordner, Zugänge, Snippets und bekannte Host-Schlüssel — alles verschlüsselt. Einspielen geht nur mit dem Sicherheitsschlüssel, auf diesem oder einem anderen System.'),
@@ -175,17 +193,14 @@ App.einstellungen = function () {
           try { await api('POST', '/api/passwort', { alt: alt.value, neu: neu1.value }); alt.value = neu1.value = neu2.value = ''; toast('Passwort geändert'); } catch (e) { fehlerToast(e); }
         } }, 'Passwort ändern'))),
       el('div', { class: 'einstellungen-gruppe' },
-        el('h4', null, 'Darstellung'),
-        el('div', { style: { maxWidth: '220px' } }, feldMit('e-schrift', 'Schriftgrösse im Terminal (px)', schrift))),
-      el('div', { class: 'einstellungen-gruppe' },
         el('h4', null, 'Bekannte Host-Schlüssel'),
-        el('p', null, 'Beim ersten Verbinden bestätigt. Aendert sich ein Schlüssel, warnt die App vor dem Verbinden.'),
+        el('p', null, 'Beim ersten Verbinden bestätigt. Ändert sich ein Schlüssel, warnt die App vor dem Verbinden.'),
         bekannt),
       el('div', { class: 'einstellungen-gruppe' },
         el('h4', null, 'Über'),
         el('p', null, 'SSH-App ', st.version, ' · Erstellt von ', el('a', { href: 'https://iotueli.ch', target: '_blank', rel: 'noopener' }, 'IoTUeli')),
-        el('p', null, 'Verwendet xterm.js (MIT), IBM Plex Sans und JetBrains Mono (OFL), Befehlshilfe aus tldr-pages (CC BY 4.0). ',
-          el('a', { href: 'vendor/licenses/', target: '_blank' }, 'Lizenzen')))),
+        el('p', null, 'Verwendet xterm.js (MIT), IBM Plex Sans und JetBrains Mono (OFL) sowie Go-Bibliotheken (BSD, ISC, MIT). Befehlshilfe: ', tldrQuelle(false), '.'),
+        el('div', null, el('a', { class: 'btn klein', href: 'vendor/licenses/', target: '_blank', rel: 'noopener' }, 'Lizenzen')))),
   });
 };
 

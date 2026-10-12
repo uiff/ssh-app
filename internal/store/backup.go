@@ -101,8 +101,8 @@ func (s *Store) Einspielen(sg Sicherung, kopfSchluessel string) error {
 		if h.Port == 0 {
 			h.Port = 22
 		}
-		if _, err := tx.Exec(`INSERT INTO host(id,name,adresse,port,benutzer,ordner_id,zugang_id,jump_id,farbe,tags,pfad_folgen,notiz) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-			h.ID, h.Name, h.Adresse, h.Port, h.Benutzer, h.OrdnerID, h.ZugangID, h.JumpID, h.Farbe, joinTags(h.Tags), b2i(h.PfadFolgen), h.Notiz); err != nil {
+		if _, err := tx.Exec(`INSERT INTO host(id,name,adresse,port,benutzer,ordner_id,zugang_id,jump_id,farbe,tags,pfad_folgen,notiz,geraet) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			h.ID, h.Name, h.Adresse, h.Port, h.Benutzer, h.OrdnerID, h.ZugangID, h.JumpID, h.Farbe, joinTags(h.Tags), b2i(h.PfadFolgen), h.Notiz, h.Geraet); err != nil {
 			return err
 		}
 	}

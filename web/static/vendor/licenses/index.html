@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#151920">
+<title>Lizenzen · SSH-App</title>
+<link rel="icon" href="../../img/icon.svg" type="image/svg+xml">
+<script src="../../js/thema.js"></script>
+<style>
+@font-face { font-family: "Plex"; src: url(../fonts/ibm-plex-sans-latin-400-normal.woff2) format("woff2"); font-weight: 400; font-display: swap; }
+@font-face { font-family: "Plex"; src: url(../fonts/ibm-plex-sans-latin-600-normal.woff2) format("woff2"); font-weight: 600; font-display: swap; }
+@font-face { font-family: "JBMono"; src: url(../fonts/jetbrains-mono-latin-400-normal.woff2) format("woff2"); font-weight: 400; font-display: swap; }
+:root {
+  --grund: #0E1013; --flaeche: #151920; --flaeche2: #1C212A; --linie: #2A303B; --linie2: #3A4250;
+  --text: #E7E3DA; --text2: #B7BDC8; --leise: #9AA3B2;
+  --akzent: #9B7BF7; --akzent-hell: #B9A2FA; --akzent-text: #140F24; --akzent-grund: #221B36;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--grund); color: var(--text); font-family: "Plex", system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 15px; line-height: 1.5; -webkit-text-size-adjust: 100%; }
+main { max-width: 760px; margin: 0 auto; padding: 16px 16px calc(32px + env(safe-area-inset-bottom, 0px)); }
+header { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 44px; }
+h1 { font-size: 22px; margin: 0; }
+h2 { font-size: 13px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: var(--leise); margin: 28px 0 8px; }
+p { color: var(--text2); margin: 12px 0; }
+a { color: var(--akzent); }
+a:hover { color: var(--akzent-hell); }
+:focus-visible { outline: 2px solid var(--akzent); outline-offset: 2px; }
+code { font-family: "JBMono", ui-monospace, Menlo, Consolas, monospace; font-size: 13px; overflow-wrap: anywhere; }
+.zurueck { display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border: 1px solid var(--linie); border-radius: 8px; color: var(--text); text-decoration: none; white-space: nowrap; }
+.zurueck:hover { background: var(--flaeche2); color: var(--text); }
+ul { list-style: none; margin: 0; padding: 0; border: 1px solid var(--linie); border-radius: 10px; background: var(--flaeche); overflow: hidden; }
+li { padding: 12px 14px; border-top: 1px solid var(--linie); }
+li:first-child { border-top: 0; }
+.kopf { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.name { font-weight: 600; overflow-wrap: anywhere; }
+.art { font-size: 12px; padding: 1px 8px; border-radius: 999px; background: var(--akzent-grund); color: var(--akzent-hell); white-space: nowrap; }
+small { display: block; color: var(--leise); font-size: 13px; margin-top: 2px; overflow-wrap: anywhere; }
+.texte { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.texte a { display: inline-flex; align-items: center; min-height: 44px; padding: 0 14px; border: 1px solid var(--linie2); border-radius: 8px; text-decoration: none; }
+.texte a:hover { background: var(--flaeche2); }
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Lizenzen</h1>
+  <a class="zurueck" href="../../">Zur App</a>
+</header>
+
+<p>SSH-App steht unter der MIT-Lizenz, Copyright (c) 2026 IoTUeli (<a href="https://iotueli.ch" rel="noopener">iotueli.ch</a>).
+Name und Logo «IoTUeli» sind Kennzeichen von IoTUeli und nicht Teil der MIT-Lizenz.
+Die App enthält die folgende Drittsoftware. Die Lizenztexte lassen sich hier antippen.</p>
+
+<h2>In der Oberfläche</h2>
+<ul>
+  <li>
+    <div class="kopf"><span class="name">xterm.js</span><span class="art">MIT</span></div>
+    <small>Copyright (c) 2017-2019 The xterm.js authors, Copyright (c) 2014-2016 SourceLair Private Company</small>
+    <div class="texte"><a href="xterm.LICENSE">Lizenztext</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name">xterm.js-Addons fit, web-links, search, unicode11</span><span class="art">MIT</span></div>
+    <small>Copyright (c) 2017, 2019 The xterm.js authors</small>
+    <div class="texte">
+      <a href="xterm-addon-fit.LICENSE">fit</a>
+      <a href="xterm-addon-web-links.LICENSE">web-links</a>
+      <a href="xterm-addon-search.LICENSE">search</a>
+      <a href="xterm-addon-unicode11.LICENSE">unicode11</a>
+    </div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name">IBM Plex Sans</span><span class="art">OFL 1.1</span></div>
+    <small>Copyright 2019 IBM Corp.</small>
+    <div class="texte"><a href="ibm-plex-sans.LICENSE">Lizenztext</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name">JetBrains Mono</span><span class="art">OFL 1.1</span></div>
+    <small>Copyright 2020 The JetBrains Mono Project Authors</small>
+    <div class="texte"><a href="jetbrains-mono.LICENSE">Lizenztext</a></div>
+  </li>
+</ul>
+
+<h2>Im Programm (Go)</h2>
+<ul>
+  <li>
+    <div class="kopf"><span class="name">Go-Standardbibliothek</span><span class="art">BSD-3-Clause</span></div>
+    <small>Copyright 2009 The Go Authors</small>
+    <div class="texte"><a href="go-standardbibliothek.LICENSE">Lizenztext</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name"><code>golang.org/x/crypto</code></span><span class="art">BSD-3-Clause</span></div>
+    <small>Copyright 2009 The Go Authors</small>
+    <div class="texte"><a href="go-golang.org-x-crypto.LICENSE">Lizenztext</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name"><code>golang.org/x/sys</code></span><span class="art">BSD-3-Clause</span></div>
+    <small>Copyright 2009 The Go Authors</small>
+    <div class="texte"><a href="go-golang.org-x-sys.LICENSE">Lizenztext</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name"><code>github.com/pkg/sftp</code></span><span class="art">BSD-2-Clause</span></div>
+    <small>Copyright (c) 2013 Dave Cheney</small>
+    <div class="texte"><a href="go-github.com-pkg-sftp.LICENSE">Lizenztext</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name"><code>github.com/kr/fs</code></span><span class="art">BSD-3-Clause</span></div>
+    <small>Copyright (c) 2012 The Go Authors</small>
+    <div class="texte"><a href="go-github.com-kr-fs.LICENSE">Lizenztext</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name"><code>github.com/coder/websocket</code></span><span class="art">ISC</span></div>
+    <small>Copyright (c) 2025 Coder</small>
+    <div class="texte"><a href="go-github.com-coder-websocket.LICENSE">Lizenztext</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name"><code>modernc.org/sqlite</code></span><span class="art">BSD-3-Clause</span></div>
+    <small>Copyright (c) 2017 The Sqlite Authors. Enthält SQLite (gemeinfrei).</small>
+    <div class="texte"><a href="go-modernc.org-sqlite.LICENSE">Lizenztext</a><a href="go-modernc.org-sqlite.LICENSE-SQLITE">SQLite</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name"><code>modernc.org/libc</code></span><span class="art">BSD-3-Clause</span></div>
+    <small>Copyright (c) 2017 The Libc Authors. Enthält nach Go übertragene Teile der musl libc (MIT, Copyright Rich Felker et al.),
+      der Go-Standardbibliothek, von go-netdb (MIT, Dominik Honnef) und NixOS/nixpkgs (MIT).</small>
+    <div class="texte"><a href="go-modernc.org-libc.LICENSE">Lizenztext</a><a href="go-modernc.org-libc.LICENSE-3RD-PARTY">musl und weitere</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name"><code>modernc.org/memory</code></span><span class="art">BSD-3-Clause</span></div>
+    <small>Copyright (c) 2017 The Memory Authors. Enthält Teile von mmap-go (Copyright (c) 2011 Evan Shaw) und der Go-Standardbibliothek.</small>
+    <div class="texte"><a href="go-modernc.org-memory.LICENSE">Lizenztext</a><a href="go-modernc.org-memory.LICENSE-MMAP-GO">mmap-go</a><a href="go-modernc.org-memory.LICENSE-GO">Go</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name"><code>modernc.org/mathutil</code></span><span class="art">BSD-3-Clause</span></div>
+    <small>Copyright (c) 2014 The mathutil Authors</small>
+    <div class="texte"><a href="go-modernc.org-mathutil.LICENSE">Lizenztext</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name"><code>github.com/remyoudompheng/bigfft</code></span><span class="art">BSD-3-Clause</span></div>
+    <small>Copyright (c) 2012 The Go Authors</small>
+    <div class="texte"><a href="go-github.com-remyoudompheng-bigfft.LICENSE">Lizenztext</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name"><code>github.com/google/uuid</code></span><span class="art">BSD-3-Clause</span></div>
+    <small>Copyright (c) 2009, 2014 Google Inc.</small>
+    <div class="texte"><a href="go-github.com-google-uuid.LICENSE">Lizenztext</a></div>
+  </li>
+  <li>
+    <div class="kopf"><span class="name"><code>github.com/dustin/go-humanize</code></span><span class="art">MIT</span></div>
+    <small>Copyright (c) 2005-2008 Dustin Sallings</small>
+    <div class="texte"><a href="go-github.com-dustin-go-humanize.LICENSE">Lizenztext</a></div>
+  </li>
+</ul>
+
+<h2>Daten</h2>
+<ul>
+  <li>
+    <div class="kopf"><span class="name">tldr-pages (Befehlshilfe)</span><span class="art">CC BY 4.0</span></div>
+    <small>Copyright 2014 bis heute das tldr-pages-Team und Mitwirkende,
+      <a href="https://github.com/tldr-pages/tldr" rel="noopener">github.com/tldr-pages/tldr</a>.
+      Die Seiten werden beim Bau des Containers unverändert geladen.</small>
+    <div class="texte"><a href="tldr-pages.LICENSE">Lizenztext</a><a href="https://creativecommons.org/licenses/by/4.0/deed.de" rel="noopener">CC BY 4.0</a></div>
+  </li>
+</ul>
+</main>
+</body>
+</html>

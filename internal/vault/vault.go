@@ -44,6 +44,7 @@ var (
 	ErrNichtAngelegt    = errors.New("Die App ist noch nicht eingerichtet")
 	ErrZuKurz           = fmt.Errorf("Das Passwort braucht mindestens %d Zeichen", MinPasswortLaenge)
 	ErrBenutzer         = errors.New("Benutzername: 1 bis 40 Zeichen, keine Leerzeichen")
+	ErrAltFalsch        = errors.New("Das bisherige Passwort ist falsch")
 )
 
 // Kopf ist der dauerhaft gespeicherte Teil. Er enthaelt keine Klartext-Geheimnisse.
@@ -85,10 +86,29 @@ func ableiten(roh []byte, zweck string) []byte {
 }
 
 // Tresor haelt den Datenschluessel, solange er entsperrt ist.
+//
+// Abgeleitete Schluessel (KEKs, Backup-Schluessel) werden nach Gebrauch geleert,
+// der DEK beim Ersetzen und beim Sperren. Kopien, die Go selbst anlegt (Passwort-
+// Strings, interne Puffer von Argon2 und AES), lassen sich nicht garantiert loeschen.
 type Tresor struct {
 	mu   sync.RWMutex
 	kopf *Kopf
 	dek  []byte
+	aead cipher.AEAD // fuer den DEK, einmal erzeugt
+}
+
+// dekSetzen ersetzt den DEK (t.mu muss gesperrt sein) und leert den bisherigen.
+func (t *Tresor) dekSetzen(dek []byte) error {
+	aead, err := gcmFuer(dek)
+	if err != nil {
+		clear(dek)
+		return err
+	}
+	if t.dek != nil && (len(t.dek) == 0 || len(dek) == 0 || &t.dek[0] != &dek[0]) {
+		clear(t.dek)
+	}
+	t.dek, t.aead = dek, aead
+	return nil
 }
 
 // Neu laedt einen Tresor aus einem gespeicherten Kopf (leer = noch nicht eingerichtet).
@@ -179,18 +199,26 @@ func (t *Tresor) Einrichten(benutzer, passwort string) (kopf []byte, sicherheits
 	}
 	dek := zufall(32)
 	roh := zufall(32)
+	defer clear(roh)
 	k := Kopf{Version: 1, Benutzer: benutzer}
 	k.argonParameter()
-	if k.DEKPasswort, err = versiegeln(k.passwortKEK(passwort), dek); err != nil {
+	kek, nk, bs := k.passwortKEK(passwort), notfallKEK(roh), backupSchluessel(roh)
+	defer clear(kek)
+	defer clear(nk)
+	defer clear(bs)
+	if k.DEKPasswort, err = versiegeln(kek, dek); err != nil {
 		return nil, "", err
 	}
-	if k.DEKNotfall, err = versiegeln(notfallKEK(roh), dek); err != nil {
+	if k.DEKNotfall, err = versiegeln(nk, dek); err != nil {
 		return nil, "", err
 	}
-	if k.BackupVerpackt, err = versiegeln(dek, backupSchluessel(roh)); err != nil {
+	if k.BackupVerpackt, err = versiegeln(dek, bs); err != nil {
 		return nil, "", err
 	}
-	t.kopf, t.dek = &k, dek
+	if err := t.dekSetzen(dek); err != nil {
+		return nil, "", err
+	}
+	t.kopf = &k
 	kopf, err = json.Marshal(k)
 	return kopf, SchluesselFormatieren(roh), err
 }
@@ -203,14 +231,24 @@ func (t *Tresor) Anmelden(benutzer, passwort string) error {
 	if k == nil {
 		return ErrNichtAngelegt
 	}
-	dek, err := oeffnen(k.passwortKEK(passwort), k.DEKPasswort)
-	if err != nil || subtle.ConstantTimeCompare([]byte(benutzer), []byte(k.Benutzer)) != 1 {
+	kek := k.passwortKEK(passwort)
+	dek, err := oeffnen(kek, k.DEKPasswort)
+	clear(kek)
+	if err != nil {
+		return ErrFalsch
+	}
+	if subtle.ConstantTimeCompare([]byte(benutzer), []byte(k.Benutzer)) != 1 {
+		clear(dek)
 		return ErrFalsch
 	}
 	t.mu.Lock()
-	t.dek = dek
-	t.mu.Unlock()
-	return nil
+	defer t.mu.Unlock()
+	if t.dek != nil && t.kopf == k {
+		// Schon offen (weitere Anmeldung): den vorhandenen DEK behalten.
+		clear(dek)
+		return nil
+	}
+	return t.dekSetzen(dek)
 }
 
 // PasswortAendern verpackt den DEK neu. Geheimnisse und Sicherheitsschluessel bleiben.
@@ -224,9 +262,11 @@ func (t *Tresor) PasswortAendern(alt, neu string) ([]byte, error) {
 	if k == nil {
 		return nil, ErrNichtAngelegt
 	}
-	dek, err := oeffnen(k.passwortKEK(alt), k.DEKPasswort)
+	kek := k.passwortKEK(alt)
+	dek, err := oeffnen(kek, k.DEKPasswort)
+	clear(kek)
 	if err != nil {
-		return nil, errors.New("Das bisherige Passwort ist falsch")
+		return nil, ErrAltFalsch
 	}
 	return t.neuVerpacken(*k, dek, k.Benutzer, neu)
 }
@@ -243,13 +283,16 @@ func (t *Tresor) Zuruecksetzen(sicherheitsschluessel, benutzer, neu string) ([]b
 	if err != nil {
 		return nil, err
 	}
+	defer clear(roh)
 	t.mu.RLock()
 	k := t.kopf
 	t.mu.RUnlock()
 	if k == nil {
 		return nil, ErrNichtAngelegt
 	}
-	dek, err := oeffnen(notfallKEK(roh), k.DEKNotfall)
+	nk := notfallKEK(roh)
+	dek, err := oeffnen(nk, k.DEKNotfall)
+	clear(nk)
 	if err != nil {
 		return nil, ErrSchluesselFalsch
 	}
@@ -259,13 +302,23 @@ func (t *Tresor) Zuruecksetzen(sicherheitsschluessel, benutzer, neu string) ([]b
 func (t *Tresor) neuVerpacken(k Kopf, dek []byte, benutzer, passwort string) ([]byte, error) {
 	k.Benutzer = benutzer
 	k.argonParameter()
+	kek := k.passwortKEK(passwort)
 	var err error
-	if k.DEKPasswort, err = versiegeln(k.passwortKEK(passwort), dek); err != nil {
+	k.DEKPasswort, err = versiegeln(kek, dek)
+	clear(kek)
+	if err != nil {
+		clear(dek)
 		return nil, err
 	}
 	t.mu.Lock()
-	t.kopf, t.dek = &k, dek
+	err = t.dekSetzen(dek)
+	if err == nil {
+		t.kopf = &k
+	}
 	t.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
 	return json.Marshal(k)
 }
 
@@ -274,7 +327,7 @@ func (t *Tresor) Sperren() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	clear(t.dek)
-	t.dek = nil
+	t.dek, t.aead = nil, nil
 }
 
 func (t *Tresor) Verschluesseln(klar []byte) ([]byte, error) {
@@ -283,10 +336,10 @@ func (t *Tresor) Verschluesseln(klar []byte) ([]byte, error) {
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	if t.dek == nil {
+	if t.aead == nil {
 		return nil, ErrGesperrt
 	}
-	return versiegeln(t.dek, klar)
+	return versiegelnMit(t.aead, klar), nil
 }
 
 func (t *Tresor) Entschluesseln(geheim []byte) ([]byte, error) {
@@ -295,10 +348,10 @@ func (t *Tresor) Entschluesseln(geheim []byte) ([]byte, error) {
 	}
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	if t.dek == nil {
+	if t.aead == nil {
 		return nil, ErrGesperrt
 	}
-	return oeffnen(t.dek, geheim)
+	return oeffnenMit(t.aead, geheim)
 }
 
 // BackupVersiegeln verschluesselt eine Sicherung mit dem Backup-Schluessel.
@@ -308,10 +361,11 @@ func (t *Tresor) BackupVersiegeln(klar []byte) ([]byte, error) {
 	if t.dek == nil {
 		return nil, ErrGesperrt
 	}
-	bk, err := oeffnen(t.dek, t.kopf.BackupVerpackt)
+	bk, err := oeffnenMit(t.aead, t.kopf.BackupVerpackt)
 	if err != nil {
 		return nil, err
 	}
+	defer clear(bk)
 	return versiegeln(bk, klar)
 }
 
@@ -321,11 +375,45 @@ func BackupOeffnen(sicherheitsschluessel string, geheim []byte) ([]byte, error) 
 	if err != nil {
 		return nil, err
 	}
-	klar, err := oeffnen(backupSchluessel(roh), geheim)
+	bs := backupSchluessel(roh)
+	clear(roh)
+	klar, err := oeffnen(bs, geheim)
+	clear(bs)
 	if err != nil {
 		return nil, ErrSchluesselFalsch
 	}
 	return klar, nil
+}
+
+// KopfPruefen prueft einen Tresor-Kopf (etwa aus einer Sicherung) samt
+// Sicherheitsschluessel, ohne etwas zu veraendern.
+func KopfPruefen(kopfJSON []byte, sicherheitsschluessel string) error {
+	k, err := KopfLesen(kopfJSON)
+	if err != nil {
+		return err
+	}
+	dek, err := notfallOeffnen(k, sicherheitsschluessel)
+	if err != nil {
+		return err
+	}
+	clear(dek)
+	return nil
+}
+
+// notfallOeffnen entpackt den DEK eines Kopfs mit dem Sicherheitsschluessel.
+func notfallOeffnen(k Kopf, sicherheitsschluessel string) ([]byte, error) {
+	roh, err := SchluesselLesen(sicherheitsschluessel)
+	if err != nil {
+		return nil, err
+	}
+	nk := notfallKEK(roh)
+	clear(roh)
+	dek, err := oeffnen(nk, k.DEKNotfall)
+	clear(nk)
+	if err != nil {
+		return nil, ErrSchluesselFalsch
+	}
+	return dek, nil
 }
 
 // Uebernehmen ersetzt den Kopf (nach dem Einspielen eines Backups) und
@@ -335,17 +423,16 @@ func (t *Tresor) Uebernehmen(kopfJSON []byte, sicherheitsschluessel string) erro
 	if err != nil {
 		return err
 	}
-	roh, err := SchluesselLesen(sicherheitsschluessel)
+	dek, err := notfallOeffnen(k, sicherheitsschluessel)
 	if err != nil {
 		return err
 	}
-	dek, err := oeffnen(notfallKEK(roh), k.DEKNotfall)
-	if err != nil {
-		return ErrSchluesselFalsch
-	}
 	t.mu.Lock()
-	t.kopf, t.dek = &k, dek
-	t.mu.Unlock()
+	defer t.mu.Unlock()
+	if err := t.dekSetzen(dek); err != nil {
+		return err
+	}
+	t.kopf = &k
 	return nil
 }
 
@@ -384,8 +471,12 @@ func versiegeln(schluessel, klar []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return versiegelnMit(gcm, klar), nil
+}
+
+func versiegelnMit(gcm cipher.AEAD, klar []byte) []byte {
 	nonce := zufall(gcm.NonceSize())
-	return gcm.Seal(nonce, nonce, klar, nil), nil
+	return gcm.Seal(nonce, nonce, klar, nil)
 }
 
 func oeffnen(schluessel, geheim []byte) ([]byte, error) {
@@ -393,6 +484,10 @@ func oeffnen(schluessel, geheim []byte) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	return oeffnenMit(gcm, geheim)
+}
+
+func oeffnenMit(gcm cipher.AEAD, geheim []byte) ([]byte, error) {
 	n := gcm.NonceSize()
 	if len(geheim) < n {
 		return nil, errors.New("Geheimnis zu kurz")

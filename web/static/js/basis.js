@@ -61,6 +61,7 @@ const ICONS = {
   mehr: 'M12 6h.01M12 12h.01M12 18h.01',
   speichern: 'M5 3h11l3 3v15H5zM8 3v5h7M8 21v-7h8v7',
   schrift: 'M4 20l6-16h2l6 16M7 14h8',
+  fenster: 'M3 5h18v14H3zM3 9h18M6 7h.01M9 7h.01',
 };
 function icon(name, groesse) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -83,18 +84,30 @@ class ApiFehler extends Error {
   constructor(text, status) { super(text); this.status = status; }
 }
 
-async function api(methode, pfad, rumpf) {
-  const opt = { method: methode, headers: { 'X-SSH-App': '1' }, credentials: 'same-origin' };
-  if (rumpf instanceof FormData) opt.body = rumpf;
-  else if (rumpf !== undefined) { opt.body = JSON.stringify(rumpf); opt.headers['Content-Type'] = 'application/json'; }
+// Routen ohne Anmeldung: eine 401 dort ist eine Antwort (z.B. falscher Sicherheitsschluessel),
+// keine abgelaufene Anmeldung.
+const OFFENE_ROUTEN = ['/api/status', '/api/anmelden', '/api/einrichten', '/api/zuruecksetzen', '/api/einspielen'];
+
+// opt.auto: automatische Abfrage (Zeitgeber, Wiederverbinden). Sie verlaengert die Anmeldung nicht.
+async function api(methode, pfad, rumpf, opt) {
+  const kopf = { 'X-SSH-App': '1' };
+  if (opt && opt.auto) kopf['X-SSH-App-Auto'] = '1';
+  const o = { method: methode, headers: kopf, credentials: 'same-origin' };
+  if (rumpf instanceof FormData) o.body = rumpf;
+  else if (rumpf !== undefined) { o.body = JSON.stringify(rumpf); kopf['Content-Type'] = 'application/json'; }
   let res;
-  try { res = await fetch(pfad, opt); }
+  try { res = await fetch(pfad, o); }
   catch (e) { throw new ApiFehler('Server nicht erreichbar — Netzwerkverbindung prüfen', 0); }
   let daten = null;
   try { daten = await res.json(); } catch (e) { /* leer */ }
   if (!res.ok) {
-    if (res.status === 401 && !pfad.startsWith('/api/anmelden') && App.abgemeldet) App.abgemeldet();
-    throw new ApiFehler((daten && daten.fehler) || ('Fehler ' + res.status), res.status);
+    const f = new ApiFehler((daten && daten.fehler) || ('Fehler ' + res.status), res.status);
+    const offen = OFFENE_ROUTEN.some((r) => pfad === r || pfad.startsWith(r + '?'));
+    if (res.status === 401 && !offen && App.status && App.status.angemeldet && App.abgemeldet) {
+      f.abgemeldet = true; // App.abgemeldet meldet es schon — kein zweiter Toast
+      App.abgemeldet();
+    }
+    throw f;
   }
   return daten;
 }
@@ -105,7 +118,58 @@ function toast(text, art) {
   document.getElementById('toasts').append(t);
   setTimeout(() => t.remove(), art === 'fehler' ? 6000 : 3200);
 }
-function fehlerToast(e) { toast(e && e.message ? e.message : String(e), 'fehler'); }
+function fehlerToast(e) {
+  if (e && e.abgemeldet) return;
+  toast(e && e.message ? e.message : String(e), 'fehler');
+}
+
+// ---------- Ebenen und Zurueck-Geste ----------
+// Dialoge, Palette, Menues und Blaetter (Telefon) sind Ebenen. Solange eine offen ist, liegt ein
+// eigener Verlaufseintrag obenauf: Die Zurueck-Geste (Android, installierte App) schliesst dann die
+// oberste Ebene, statt die App zu verlassen.
+const ebenen = [];
+let ebenenWaechter = false; // liegt unser Verlaufseintrag gerade obenauf?
+let ebenenPopIgnorieren = false;
+
+function ebeneAuf(schliessen) {
+  const e = { schliessen };
+  ebenen.push(e);
+  if (!ebenenWaechter) {
+    try { history.pushState({ sshappEbene: true }, ''); ebenenWaechter = true; } catch (x) { /* ohne Verlauf */ }
+  }
+  return e;
+}
+function ebeneZu(e) {
+  const i = ebenen.indexOf(e);
+  if (i < 0) return;
+  ebenen.splice(i, 1);
+  // Erst im naechsten Durchlauf: oeffnet die Aktion gleich die naechste Ebene (z.B. Rueckfrage nach
+  // der Palette), bleibt der Verlaufseintrag einfach stehen.
+  if (!ebenen.length) setTimeout(ebenenWaechterAbbauen, 0);
+}
+function ebenenWaechterAbbauen() {
+  if (ebenen.length || !ebenenWaechter) return;
+  ebenenWaechter = false;
+  if (history.state && history.state.sshappEbene) { ebenenPopIgnorieren = true; history.back(); }
+}
+window.addEventListener('popstate', () => {
+  if (ebenenPopIgnorieren) { ebenenPopIgnorieren = false; return; }
+  ebenenWaechter = false;
+  const oben = ebenen[ebenen.length - 1];
+  if (oben) oben.schliessen();
+  if (ebenen.length && !ebenenWaechter) {
+    try { history.pushState({ sshappEbene: true }, ''); ebenenWaechter = true; } catch (x) { /* ohne Verlauf */ }
+  }
+});
+// Nach dem Neuladen liegt evtl. noch ein alter Verlaufseintrag obenauf: abbauen, sonst bewirkt der
+// naechste Zurueck-Druck nichts.
+if (history.state && history.state.sshappEbene) { ebenenPopIgnorieren = true; history.back(); }
+// Alles schliessen (Abmelden): Dialoge, Menues, Palette.
+function ebenenAlleZu() {
+  for (const e of ebenen.slice().reverse()) { try { e.schliessen(true); } catch (x) { /* weiter */ } }
+  for (const e of dialogStapel.slice().reverse()) e.zu();
+  document.querySelectorAll('.menue, .menue-schleier').forEach((m) => m.remove());
+}
 
 // ---------- Dialoge ----------
 const dialogStapel = [];
@@ -113,11 +177,12 @@ function dialog({ titel, inhalt, knoepfe, breit, beimSchliessen, schliessbar = t
   const wurzel = document.getElementById('modal-wurzel');
   const schleier = el('div', { class: 'schleier' });
   const fuss = knoepfe && knoepfe.length ? el('div', { class: 'dialog-fuss' }, knoepfe) : null;
-  const d = el('div', { class: 'dialog' + (breit ? ' breit' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': titel },
+  const d = el('div', { class: 'dialog' + (breit ? ' breit' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': titel, tabindex: '-1' },
     el('div', { class: 'blatt-griff', 'aria-hidden': 'true' }),
     el('div', { class: 'dialog-kopf' }, el('h3', { text: titel }), schliessbar ? ikonKnopf('x', 'Schliessen', () => zu()) : null),
     el('div', { class: 'dialog-inhalt' }, inhalt),
     fuss);
+  const vorher = document.activeElement;
   let offen = true;
   function zu(wert) {
     if (!offen) return;
@@ -125,28 +190,50 @@ function dialog({ titel, inhalt, knoepfe, breit, beimSchliessen, schliessbar = t
     schleier.remove(); d.remove();
     const i = dialogStapel.indexOf(eintrag);
     if (i >= 0) dialogStapel.splice(i, 1);
+    ebeneZu(ebene);
+    // Fokus zurueck (nur Desktop: auf dem Telefon wuerde das die Tastatur oeffnen).
+    if (!App.istTelefon() && (!document.activeElement || document.activeElement === document.body)) {
+      if (vorher && vorher.isConnected && vorher !== document.body) vorher.focus({ preventScroll: true });
+      else if (App.aktiv && !dialogStapel.length && !(App.paletteObj && App.paletteObj.offen)) App.aktiv.term.focus();
+    }
     if (beimSchliessen) beimSchliessen(wert);
   }
   const eintrag = { zu, schliessbar };
+  const ebene = ebeneAuf(() => { if (schliessbar) zu(); });
   if (schliessbar) schleier.addEventListener('click', () => zu());
   wurzel.append(schleier, d);
   dialogStapel.push(eintrag);
-  const erstes = d.querySelector('input:not([type=checkbox]):not([type=file]), select, textarea');
-  if (erstes && !App.istTelefon()) setTimeout(() => erstes.focus(), 30);
+  // Fokus in den Dialog holen, sonst gehen Enter und Tippen an das Terminal dahinter.
+  const erstes = d.querySelector('input:not([type=checkbox]):not([type=file]):not([type=hidden]), select, textarea');
+  if (erstes && !App.istTelefon()) setTimeout(() => { if (offen && !d.contains(document.activeElement)) erstes.focus(); }, 30);
+  else {
+    // Ohne Eingabefeld: Hauptknopf (Enter bestaetigt). Bei gefaehrlichen Aktionen nur den Dialog
+    // selbst — Enter loest dort nichts aus, Escape bricht ab. Telefon: immer der Dialog selbst (ohne
+    // Ring); der Fokus muss nur aus dem Terminal heraus, eine Eingabetaste gibt es dort nicht.
+    const haupt = !App.istTelefon() && fuss && fuss.querySelector('.btn.primaer:not(.links)');
+    (haupt || d).focus({ preventScroll: true });
+  }
   return { zu, element: d };
 }
+// Escape im Capture-Modus: das Terminal (xterm) haelt die Taste sonst fest.
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'Escape' && dialogStapel.length) {
+  if (e.key !== 'Escape' || menue.offen) return; // ein offenes Menue schliesst sich selbst
+  if (dialogStapel.length) {
     const oben = dialogStapel[dialogStapel.length - 1];
-    if (oben.schliessbar) { e.preventDefault(); oben.zu(); }
+    e.preventDefault(); e.stopPropagation();
+    if (oben.schliessbar) oben.zu();
   }
-});
+}, true);
 
-function frage(text, { titel = 'Bitte bestätigen', ja = 'OK', gefahr = false } = {}) {
+// Rueckfrage. befehl (optional) steht abgesetzt in Festbreitenschrift unter dem Text.
+function frage(text, { titel = 'Bitte bestätigen', ja = 'OK', gefahr = false, befehl } = {}) {
   return new Promise((resolve) => {
     let ergebnis = false;
     const d = dialog({
-      titel, inhalt: el('p', { style: { margin: 0, lineHeight: 1.55 } }, text),
+      titel,
+      inhalt: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
+        el('p', { class: 'frage-text' }, text),
+        befehl ? el('div', { class: 'befehl-gross' }, befehl) : null),
       knoepfe: [
         el('button', { class: 'btn', type: 'button', onclick: () => d.zu() }, 'Abbrechen'),
         el('button', { class: 'btn ' + (gefahr ? 'gefahr' : 'primaer'), type: 'button', onclick: () => { ergebnis = true; d.zu(); } }, ja),
@@ -175,18 +262,42 @@ function eingabe(label, { titel, wert = '', hinweis, passwort = false, ok = 'OK'
 }
 
 // Kontextmenue: am Element (Desktop) oder als Blatt unten (Telefon).
+// Escape schliesst, Pfeiltasten waehlen; ein zweites Oeffnen ersetzt das erste samt Schleier.
 function menue(anker, eintraege) {
-  document.querySelectorAll('.menue').forEach((m) => m.remove());
-  const schleier = el('div', { class: 'schleier', style: { background: App.istTelefon() ? 'rgba(5,6,8,.5)' : 'transparent' } });
+  document.querySelectorAll('.menue, .menue-schleier').forEach((m) => m.remove());
+  if (menue.offen) menue.offen();
+  const schleier = el('div', { class: 'schleier menue-schleier', style: { background: App.istTelefon() ? 'rgba(5,6,8,.5)' : 'transparent' } });
   const m = el('div', { class: 'menue', role: 'menu' });
-  function zu() { m.remove(); schleier.remove(); }
+  const vorher = document.activeElement;
+  let offen = true;
+  function zu(ohneFokus) {
+    if (!offen) return;
+    offen = false;
+    m.remove(); schleier.remove();
+    document.removeEventListener('keydown', taste, true);
+    ebeneZu(ebene);
+    if (menue.offen === zu) menue.offen = null;
+    if (!ohneFokus && !App.istTelefon() && vorher && vorher.isConnected && !dialogStapel.length) vorher.focus({ preventScroll: true });
+  }
+  function taste(e) {
+    const knoepfe = [...m.querySelectorAll('button')];
+    const i = knoepfe.indexOf(document.activeElement);
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); zu(); }
+    else if (e.key === 'ArrowDown') { e.preventDefault(); e.stopPropagation(); (knoepfe[i + 1] || knoepfe[0]).focus(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); e.stopPropagation(); (knoepfe[i - 1] || knoepfe[knoepfe.length - 1]).focus(); }
+    else if (e.key === 'Tab') { e.preventDefault(); e.stopPropagation(); (knoepfe[e.shiftKey ? i - 1 : i + 1] || knoepfe[e.shiftKey ? knoepfe.length - 1 : 0]).focus(); }
+  }
   for (const e of eintraege) {
     if (!e) continue;
-    m.append(el('button', { type: 'button', role: 'menuitem', class: e.gefahr ? 'gefahr' : '', onclick: () => { zu(); e.aktion(); } },
-      e.icon ? icon(e.icon) : null, e.text));
+    m.append(el('button', { type: 'button', role: 'menuitem', class: (e.gefahr ? 'gefahr' : '') + (e.aktiv ? ' aktiv' : ''), 'aria-current': e.aktiv ? 'true' : null,
+      onclick: () => { zu(true); e.aktion(); } },
+      e.symbol || (e.icon ? icon(e.icon) : null), e.text));
   }
-  schleier.addEventListener('click', zu);
+  schleier.addEventListener('click', () => zu());
   document.body.append(schleier, m);
+  const ebene = ebeneAuf(() => zu(true));
+  menue.offen = zu;
+  document.addEventListener('keydown', taste, true);
   if (!App.istTelefon() && anker) {
     const r = anker.getBoundingClientRect();
     const mw = m.offsetWidth, mh = m.offsetHeight;
@@ -194,6 +305,9 @@ function menue(anker, eintraege) {
     if (y + mh > window.innerHeight - 8) y = Math.max(8, r.top - mh - 4);
     m.style.left = Math.max(8, x) + 'px'; m.style.top = y + 'px';
   }
+  // Fokus ins Menue, damit Tasten nicht ans Terminal gehen (auf dem Telefon ohne sichtbaren Ring).
+  const erster = m.querySelector('button');
+  if (erster) erster.focus({ preventScroll: true });
 }
 
 // ---------- Kleinkram ----------
@@ -228,6 +342,15 @@ function lokal(k, standard) {
 }
 function lokalSetzen(k, v) { try { localStorage.setItem('sshapp.' + k, JSON.stringify(v)); } catch (e) { /* privat */ } }
 
+// tldr-Texte zeichnen Befehle mit `Backticks` aus: als <code> zeigen bzw. fuer Namen entfernen.
+function mitCode(text) {
+  const s = String(text || '');
+  const teile = s.split('`');
+  if (teile.length < 3 || teile.length % 2 === 0) return s;
+  return teile.map((t, i) => (i % 2 ? el('code', { class: 'inline' }, t) : t)).filter((t) => t !== '');
+}
+function ohneCode(text) { return String(text || '').replace(/`/g, ''); }
+
 // Platzhalter {{name}} in Befehlen (tldr und Snippets).
 function platzhalter(befehl) {
   const namen = [];
@@ -255,7 +378,48 @@ function befehlAnzeige(befehl) {
   return frag;
 }
 
-const GEFAEHRLICH = /(^|[;&|]\s*|sudo\s+)(rm\s+-[a-z]*r[a-z]*f|rm\s+-[a-z]*f[a-z]*r|dd\s+|mkfs|shutdown|reboot|poweroff|halt\b|:\(\)\s*\{)/i;
+// Erkennung gefaehrlicher Befehle (Rueckfrage bei Hosts mit Tag «kritisch»). Prueft jeden Teil einer
+// Befehlskette einzeln und laesst Vorsilben wie sudo, doas, env, nohup oder VAR=wert weg.
+// Vorsilben, nach denen der eigentliche Befehl kommt, mit ihren Schaltern, die einen eigenen Wert haben.
+const VORSILBEN = {
+  sudo: ['-u', '-g', '-p', '-C', '-D', '-h', '-r', '-t', '-U', '-T'], doas: ['-u', '-C'], run0: ['-u', '-g', '-D'],
+  env: ['-u', '-C', '-S'], nice: ['-n'], ionice: ['-c', '-n', '-p'], time: ['-f', '-o'], xargs: ['-I', '-n', '-P', '-L', '-s', '-d', '-E', '-a'],
+  exec: ['-a'], nohup: [], command: [], builtin: [], stdbuf: [], chroot: [],
+};
+const SCHLUESSELWOERTER = ['{', '}', '!', 'then', 'do', 'else', 'if', 'while', 'until'];
+function istGefaehrlich(text) {
+  const t = String(text || '');
+  if (/:\(\)\s*\{/.test(t)) return true; // Fork-Bombe
+  if (/>\s*\/dev\/(sd|hd|vd|xvd|nvme|mmcblk|disk)/i.test(t)) return true; // Geraet ueberschreiben
+  for (const teil of t.split(/;|&&|\|\||\||\n|\$\(|`|\(|\)/)) {
+    const w = teil.trim().split(/\s+/).filter(Boolean);
+    while (w.length) {
+      if (/^\w+=/.test(w[0]) || SCHLUESSELWOERTER.includes(w[0])) { w.shift(); continue; }
+      const k = w[0].replace(/^\\/, '').split('/').pop();
+      const mitWert = Object.prototype.hasOwnProperty.call(VORSILBEN, k) ? VORSILBEN[k] : null;
+      if (!mitWert) break;
+      w.shift();
+      while (w.length && (w[0].startsWith('-') || /^\w+=/.test(w[0]))) { const o = w.shift(); if (mitWert.includes(o)) w.shift(); }
+      if (k === 'chroot' && w.length) w.shift(); // Zielordner
+    }
+    if (!w.length) continue;
+    const befehl = w[0].replace(/^\\/, '').split('/').pop().toLowerCase();
+    const args = w.slice(1);
+    const schalter = [];
+    for (const a of args) { if (a === '--') break; if (a.startsWith('-')) schalter.push(a); }
+    if (befehl === 'rm') {
+      const r = schalter.some((o) => o === '--recursive' || /^-[^-]*[rR]/.test(o));
+      const f = schalter.some((o) => o === '--force' || /^-[^-]*f/.test(o));
+      if (r && f) return true;
+      continue;
+    }
+    if (/^(dd|wipefs|shred|shutdown|reboot|poweroff|halt)$/.test(befehl) || befehl.startsWith('mkfs')) return true;
+    if (/^(init|telinit)$/.test(befehl) && args.some((a) => a === '0' || a === '6')) return true;
+    if (befehl === 'systemctl' && args.some((a) => /^(reboot|poweroff|halt|kexec|soft-reboot)$/.test(a))) return true;
+  }
+  return false;
+}
+const GEFAEHRLICH = { test: istGefaehrlich };
 
 // Wie replaceChildren, aber Listen werden flach gemacht und null/false ausgelassen
 // (das native replaceChildren schreibt sonst «null» oder «[object …]» in die Seite).

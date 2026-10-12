@@ -17,6 +17,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -54,9 +55,16 @@ func main() {
 		os.Exit(gesund(adresse, tlsArt != "aus"))
 	}
 
-	if err := os.MkdirAll(daten, 0o700); err != nil {
-		log.Fatalf("Datenordner: %v", err)
+	if err := datenordnerPruefen(daten); err != nil {
+		log.Fatal(err)
 	}
+	proxys, err := netzListe(env("SSHAPP_PROXY", ""))
+	if err != nil {
+		log.Fatalf("SSHAPP_PROXY: %v", err)
+	}
+	hosts := liste(env("SSHAPP_HOSTS", ""))
+	origins := liste(env("SSHAPP_ORIGINS", ""))
+	cookieSecure := env("SSHAPP_COOKIE_SECURE", "") == "1"
 	st, err := store.Oeffnen(filepath.Join(daten, "ssh-app.db"))
 	if err != nil {
 		log.Fatalf("Datenbank: %v", err)
@@ -98,10 +106,21 @@ func main() {
 		tlsCfg = &tls.Config{Certificates: []tls.Certificate{cert}, MinVersion: tls.VersionTLS12}
 	}
 
+	// Schutz vor DNS-Rebinding: im reinen HTTP-Betrieb den Host-Kopf pruefen. Hinter einem
+	// HTTPS-Proxy ohne SSHAPP_PROXY ist der Proxy-Name unbekannt, dort nur mit SSHAPP_HOSTS.
+	hostPruefung := len(hosts) > 0 || (tlsArt == "aus" && (!cookieSecure || len(proxys) > 0))
+	if tlsArt == "aus" && len(proxys) == 0 {
+		log.Printf("Hinweis: Hinter einem Reverse-Proxy SSHAPP_PROXY (Adresse des Proxys) setzen — sonst gilt die Anmeldesperre für alle gemeinsam")
+	}
 	srv := server.Neu(st, tr, tm, hilfe, server.Optionen{
 		Version:        version,
 		Leerlauf:       time.Duration(leerlaufMin) * time.Minute,
-		SicheresCookie: tlsCfg != nil || env("SSHAPP_COOKIE_SECURE", "") == "1",
+		SicheresCookie: tlsCfg != nil || cookieSecure,
+		HSTS:           env("SSHAPP_HSTS", "") == "1",
+		Proxys:         proxys,
+		HostPruefung:   hostPruefung,
+		Hosts:          hosts,
+		Origins:        origins,
 	})
 	hs := &http.Server{Addr: adresse, Handler: srv, TLSConfig: tlsCfg,
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 120 * time.Second,
@@ -133,6 +152,60 @@ func main() {
 	srv.Close()
 	tm.Close()
 	st.Close()
+}
+
+// datenordnerPruefen legt den Datenordner an, beschraenkt ihn auf den eigenen Benutzer
+// und prueft, ob er beschreibbar ist (typischer Fehler: Host-Ordner gehoert root).
+func datenordnerPruefen(daten string) error {
+	if err := os.MkdirAll(daten, 0o700); err != nil {
+		return fmt.Errorf("Datenordner %s anlegen: %v", daten, err)
+	}
+	if fi, err := os.Stat(daten); err == nil && fi.Mode().Perm()&0o077 != 0 {
+		if err := os.Chmod(daten, 0o700); err != nil {
+			log.Printf("Datenordner %s ist für andere lesbar und lässt sich nicht einschränken: %v", daten, err)
+		}
+	}
+	f, err := os.CreateTemp(daten, ".schreibprobe-*")
+	if err != nil {
+		return fmt.Errorf("Datenordner %s ist nicht beschreibbar (die App läuft als Benutzer %d) — bei einem Host-Ordner statt Volume: sudo chown %d:%d <ordner> (%v)",
+			daten, os.Getuid(), os.Getuid(), os.Getgid(), err)
+	}
+	f.Close()
+	os.Remove(f.Name())
+	return nil
+}
+
+// liste zerlegt eine kommagetrennte Einstellung.
+func liste(s string) []string {
+	var out []string
+	for _, t := range strings.Split(s, ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+// netzListe liest Adressen und Netze («10.0.0.5, 172.16.0.0/12, fd00::/8»).
+func netzListe(s string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, t := range liste(s) {
+		if strings.Contains(t, "/") {
+			p, err := netip.ParsePrefix(t)
+			if err != nil {
+				return nil, fmt.Errorf("«%s» ist kein Netz (z.B. 172.16.0.0/12)", t)
+			}
+			out = append(out, p.Masked())
+			continue
+		}
+		a, err := netip.ParseAddr(t)
+		if err != nil {
+			return nil, fmt.Errorf("«%s» ist keine IP-Adresse", t)
+		}
+		a = a.Unmap()
+		out = append(out, netip.PrefixFrom(a, a.BitLen()))
+	}
+	return out, nil
 }
 
 func anzeigeAdresse(a string) string {

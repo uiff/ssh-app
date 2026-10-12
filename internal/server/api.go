@@ -5,11 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -33,7 +33,8 @@ func speicherFehler(w http.ResponseWriter, err error) {
 		fehler(w, http.StatusUnauthorized, "Bitte anmelden")
 		return
 	}
-	fehler(w, http.StatusInternalServerError, err.Error())
+	log.Printf("Datenbank: %v", err)
+	fehler(w, http.StatusInternalServerError, "Speichern oder Lesen in der Datenbank fehlgeschlagen — Details im Server-Log")
 }
 
 // --- Bestand ---
@@ -105,6 +106,14 @@ func (s *Server) ordnerLoeschen(w http.ResponseWriter, r *http.Request) {
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
+// geraeteIDs spiegelt GERAETE in web/static/js/geraete.js (leer = Allgemein).
+// TestGeraeteWieImBrowser haelt beide Listen gleich.
+var geraeteIDs = []string{"", "sps", "hmi", "gateway", "iot", "wallbox", "wechselrichter",
+	"server", "vm", "container", "computer", "laptop", "einplatine",
+	"router", "switch", "firewall", "nas", "cloud", "drucker"}
+
+func geraetBekannt(id string) bool { return slices.Contains(geraeteIDs, id) }
+
 func (s *Server) hostSpeichern(w http.ResponseWriter, r *http.Request) {
 	var h store.Host
 	if err := lesen(r, &h); err != nil {
@@ -113,6 +122,11 @@ func (s *Server) hostSpeichern(w http.ResponseWriter, r *http.Request) {
 	}
 	h.ID = pfadID(r)
 	h.Name, h.Adresse, h.Benutzer = strings.TrimSpace(h.Name), strings.TrimSpace(h.Adresse), strings.TrimSpace(h.Benutzer)
+	h.Geraet = strings.TrimSpace(h.Geraet)
+	if !geraetBekannt(h.Geraet) {
+		fehler(w, http.StatusBadRequest, "Unbekannter Gerätetyp «"+kurz(h.Geraet, 40)+"»")
+		return
+	}
 	if h.Adresse == "" || strings.ContainsAny(h.Adresse, " /@") {
 		fehler(w, http.StatusBadRequest, "Adresse fehlt oder enthält Leerzeichen, / oder @")
 		return
@@ -319,9 +333,14 @@ func (s *Server) zugangInstallieren(w http.ResponseWriter, r *http.Request) {
 		speicherFehler(w, err)
 		return
 	}
-	ziel, jump, err := s.zielFuer(h, &sshx.Anmeldung{Passwort: p.Passwort})
+	// Hat der Host keinen Benutzer, gilt der Benutzer des einzutragenden Zugangs.
+	ziel, jump, err := s.zielFuer(h, &sshx.Anmeldung{Benutzer: z.Benutzer, Passwort: p.Passwort})
 	if err != nil {
 		fehler(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if ziel.Anmeldung.Benutzer == "" {
+		fehler(w, http.StatusBadRequest, "Für diesen Host ist kein Benutzer hinterlegt — im Host oder im Zugang eintragen")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
@@ -423,7 +442,7 @@ func sicherungLesen(r *http.Request) (store.Sicherung, string, error) {
 	defer f.Close()
 	roh, err := io.ReadAll(f)
 	if err != nil {
-		return sg, "", err
+		return sg, "", errors.New("Die Datei liess sich nicht lesen")
 	}
 	var d sicherungsDatei
 	if err := json.Unmarshal(roh, &d); err != nil || d.Format != dateiFormat {
@@ -434,48 +453,81 @@ func sicherungLesen(r *http.Request) (store.Sicherung, string, error) {
 		return sg, "", err
 	}
 	if err := json.NewDecoder(bytes.NewReader(klar)).Decode(&sg); err != nil {
-		return sg, "", fmt.Errorf("Backup-Inhalt lesen: %w", err)
+		log.Printf("Backup-Inhalt lesen: %v", err)
+		return sg, "", errors.New("Der Inhalt des Backups ist beschädigt")
 	}
 	if err := sg.Pruefen(); err != nil {
 		return sg, "", err
 	}
+	// Den Tresor-Kopf pruefen, bevor irgendetwas ersetzt wird: passt er nicht
+	// (andere Version, falscher Schluessel), bleibt der Bestand unberuehrt.
+	if err := vault.KopfPruefen(sg.TresorKopf, schluessel); err != nil {
+		if errors.Is(err, vault.ErrSchluesselFalsch) {
+			return sg, "", errors.New("Der Tresor im Backup passt nicht zum Sicherheitsschlüssel — nichts geändert")
+		}
+		return sg, "", errors.New("Der Tresor im Backup ist unvollständig oder stammt aus einer neueren Version — nichts geändert")
+	}
 	return sg, schluessel, nil
 }
 
-func (s *Server) einspielen(w http.ResponseWriter, r *http.Request) {
-	if g, rest := s.gesperrt(r); g {
-		fehler(w, http.StatusTooManyRequests, "Zu viele Fehlversuche — noch "+rest.String()+" gesperrt")
+// einspielen ersetzt den Bestand durch eine Sicherung. nurFrisch: nur auf einem
+// System ohne Einrichtung (offene Route vor der Anmeldung).
+func (s *Server) einspielen(w http.ResponseWriter, r *http.Request, nurFrisch bool) {
+	schonEingerichtet := func() bool {
+		if nurFrisch && s.tr.Angelegt() {
+			fehler(w, http.StatusConflict, "Die App ist schon eingerichtet — Backup nach der Anmeldung unter Einstellungen einspielen")
+			return true
+		}
+		return false
+	}
+	if schonEingerichtet() {
 		return
 	}
+	v, grund := s.versuchBeginnen(r)
+	if v == nil {
+		fehler(w, http.StatusTooManyRequests, grund)
+		return
+	}
+	defer v.abbrechen()
 	sg, schluessel, err := sicherungLesen(r)
 	if errors.Is(err, vault.ErrSchluesselFalsch) {
-		s.fehlversuch(r)
+		v.falsch()
+		log.Printf("Backup mit falschem Sicherheitsschlüssel von %s", s.clientIP(r))
 	}
 	if err != nil {
 		fehler(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	v.richtig()
+	// Unbekannte Geraetetypen (Backup einer neueren Version) werden zu «Allgemein».
+	for i := range sg.Hosts {
+		if !geraetBekannt(sg.Hosts[i].Geraet) {
+			sg.Hosts[i].Geraet = ""
+		}
+	}
+	s.kopfMu.Lock()
+	defer s.kopfMu.Unlock()
+	if schonEingerichtet() {
+		return
+	}
 	if err := s.st.Einspielen(sg, MetaTresor); err != nil {
-		fehler(w, http.StatusInternalServerError, "Einspielen fehlgeschlagen: "+err.Error())
+		log.Printf("Einspielen: %v", err)
+		fehler(w, http.StatusInternalServerError, "Einspielen fehlgeschlagen — nichts geändert")
 		return
 	}
 	if err := s.tr.Uebernehmen(sg.TresorKopf, schluessel); err != nil {
+		log.Printf("Einspielen: Tresor übernehmen: %v", err)
 		fehler(w, http.StatusInternalServerError, "Tresor übernehmen: "+err.Error())
 		return
 	}
-	s.erfolg(r)
 	s.alleAbmelden()
-	log.Printf("Backup vom %s eingespielt (%d Hosts)", sg.Erstellt.Format(time.DateTime), len(sg.Hosts))
+	log.Printf("Backup vom %s eingespielt (%d Hosts, von %s)", sg.Erstellt.Format(time.DateTime), len(sg.Hosts), s.clientIP(r))
 	jsonAntwort(w, http.StatusOK, map[string]any{"ok": true, "hosts": len(sg.Hosts), "benutzer": s.tr.Benutzer()})
 }
 
 // einspielenOffen: nur auf einem frischen System ohne Einrichtung.
-func (s *Server) einspielenOffen(w http.ResponseWriter, r *http.Request) {
-	if s.tr.Angelegt() {
-		fehler(w, http.StatusConflict, "Die App ist schon eingerichtet — Backup nach der Anmeldung unter Einstellungen einspielen")
-		return
-	}
-	s.einspielen(w, r)
-}
+func (s *Server) einspielenOffen(w http.ResponseWriter, r *http.Request) { s.einspielen(w, r, true) }
 
-func (s *Server) einspielenAngemeldet(w http.ResponseWriter, r *http.Request) { s.einspielen(w, r) }
+func (s *Server) einspielenAngemeldet(w http.ResponseWriter, r *http.Request) {
+	s.einspielen(w, r, false)
+}
