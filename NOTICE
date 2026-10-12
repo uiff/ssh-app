@@ -1,0 +1,17 @@
+ssh-app
+Copyright (c) 2026 IoTUeli (https://iotueli.ch) — MIT-Lizenz, siehe LICENSE.
+Name und Logo «IoTUeli» sind Kennzeichen von IoTUeli und nicht Teil der MIT-Lizenz.
+
+Mitgelieferte Drittsoftware und Daten (Lizenztexte unter web/static/vendor/licenses/):
+
+- xterm.js und Addons fit, web-links, search, unicode11 — MIT, Copyright The xterm.js authors
+- IBM Plex Sans — SIL Open Font License 1.1, Copyright IBM Corp.
+- JetBrains Mono — SIL Open Font License 1.1, Copyright The JetBrains Mono Project Authors
+- tldr-pages (Befehlshilfe, wird beim Bau des Containers geladen) — Creative Commons
+  Attribution 4.0 International (CC BY 4.0), https://github.com/tldr-pages/tldr
+
+Go-Bibliotheken (werden ins Programm uebersetzt):
+- golang.org/x/crypto — BSD-3-Clause, Copyright The Go Authors
+- github.com/pkg/sftp — BSD-2-Clause, Copyright Dave Cheney und Mitwirkende
+- github.com/coder/websocket — ISC, Copyright Coder
+- modernc.org/sqlite — BSD-3-Clause, Copyright The Sqlite Authors

@@ -1,0 +1,436 @@
+// Package store haelt Ordner, Hosts, Zugaenge, bekannte Host-Schluessel und
+// Snippets in einer SQLite-Datei. Geheimnisse kommen bereits verschluesselt an.
+package store
+
+import (
+	"database/sql"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+
+	_ "modernc.org/sqlite"
+)
+
+var ErrNichtGefunden = errors.New("nicht gefunden")
+
+type Ordner struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Rang int    `json:"rang"`
+}
+
+type Host struct {
+	ID         int64    `json:"id"`
+	Name       string   `json:"name"`
+	Adresse    string   `json:"adresse"`
+	Port       int      `json:"port"`
+	Benutzer   string   `json:"benutzer"` // ueberschreibt den Benutzer des Zugangs, wenn gesetzt
+	OrdnerID   int64    `json:"ordnerId"`
+	ZugangID   int64    `json:"zugangId"`
+	JumpID     int64    `json:"jumpId"`
+	Farbe      string   `json:"farbe"`
+	Tags       []string `json:"tags"`
+	PfadFolgen bool     `json:"pfadFolgen"`
+	Notiz      string   `json:"notiz"`
+}
+
+// Zugang = Benutzername plus Passwort und/oder privater Schluessel.
+type Zugang struct {
+	ID            int64  `json:"id"`
+	Name          string `json:"name"`
+	Benutzer      string `json:"benutzer"`
+	Art           string `json:"art"` // "passwort" | "schluessel"
+	Oeffentlich   string `json:"oeffentlich,omitempty"`
+	Fingerprint   string `json:"fingerprint,omitempty"`
+	SchluesselTyp string `json:"schluesselTyp,omitempty"`
+	HatPasswort   bool   `json:"hatPasswort"`
+	HatPassphrase bool   `json:"hatPassphrase"`
+	// Verschluesselt, nie in JSON.
+	PasswortEnc   []byte `json:"-"`
+	SchluesselEnc []byte `json:"-"`
+	PassphraseEnc []byte `json:"-"`
+}
+
+type BekannterHost struct {
+	Ziel        string    `json:"ziel"` // host:port
+	Typ         string    `json:"typ"`
+	Schluessel  string    `json:"schluessel"` // base64 wire format
+	Fingerprint string    `json:"fingerprint"`
+	Seit        time.Time `json:"seit"`
+}
+
+type Snippet struct {
+	ID           int64  `json:"id"`
+	Name         string `json:"name"`
+	Befehl       string `json:"befehl"`
+	Beschreibung string `json:"beschreibung"`
+}
+
+type Store struct{ db *sql.DB }
+
+const schema = `
+CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v BLOB);
+CREATE TABLE IF NOT EXISTS ordner (id INTEGER PRIMARY KEY, name TEXT NOT NULL, rang INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS zugang (
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL, benutzer TEXT NOT NULL DEFAULT '', art TEXT NOT NULL,
+  oeffentlich TEXT NOT NULL DEFAULT '', fingerprint TEXT NOT NULL DEFAULT '', schluessel_typ TEXT NOT NULL DEFAULT '',
+  passwort_enc BLOB, schluessel_enc BLOB, passphrase_enc BLOB);
+CREATE TABLE IF NOT EXISTS host (
+  id INTEGER PRIMARY KEY, name TEXT NOT NULL, adresse TEXT NOT NULL, port INTEGER NOT NULL DEFAULT 22,
+  benutzer TEXT NOT NULL DEFAULT '', ordner_id INTEGER NOT NULL DEFAULT 0, zugang_id INTEGER NOT NULL DEFAULT 0,
+  jump_id INTEGER NOT NULL DEFAULT 0, farbe TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '',
+  pfad_folgen INTEGER NOT NULL DEFAULT 1, notiz TEXT NOT NULL DEFAULT '');
+CREATE TABLE IF NOT EXISTS bekannt (ziel TEXT PRIMARY KEY, typ TEXT NOT NULL, schluessel TEXT NOT NULL, fingerprint TEXT NOT NULL, seit INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS snippet (id INTEGER PRIMARY KEY, name TEXT NOT NULL, befehl TEXT NOT NULL, beschreibung TEXT NOT NULL DEFAULT '');
+`
+
+func Oeffnen(pfad string) (*Store, error) {
+	db, err := sql.Open("sqlite", "file:"+pfad+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)")
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(schema); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("Schema anlegen: %w", err)
+	}
+	return &Store{db: db}, nil
+}
+
+func (s *Store) Close() error { return s.db.Close() }
+
+// --- meta ---
+
+func (s *Store) Meta(k string) ([]byte, error) {
+	var v []byte
+	err := s.db.QueryRow(`SELECT v FROM meta WHERE k=?`, k).Scan(&v)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	return v, err
+}
+
+func (s *Store) SetMeta(k string, v []byte) error {
+	_, err := s.db.Exec(`INSERT INTO meta(k,v) VALUES(?,?) ON CONFLICT(k) DO UPDATE SET v=excluded.v`, k, v)
+	return err
+}
+
+// --- Ordner ---
+
+func (s *Store) Ordner() ([]Ordner, error) {
+	rows, err := s.db.Query(`SELECT id,name,rang FROM ordner ORDER BY rang,name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Ordner{}
+	for rows.Next() {
+		var o Ordner
+		if err := rows.Scan(&o.ID, &o.Name, &o.Rang); err != nil {
+			return nil, err
+		}
+		out = append(out, o)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) OrdnerSpeichern(o *Ordner) error {
+	if o.ID == 0 {
+		r, err := s.db.Exec(`INSERT INTO ordner(name,rang) VALUES(?,?)`, o.Name, o.Rang)
+		if err != nil {
+			return err
+		}
+		o.ID, _ = r.LastInsertId()
+		return nil
+	}
+	return mussTreffen(s.db.Exec(`UPDATE ordner SET name=?,rang=? WHERE id=?`, o.Name, o.Rang, o.ID))
+}
+
+// OrdnerLoeschen haengt die Hosts des Ordners aus (sie landen in «Ohne Ordner»).
+func (s *Store) OrdnerLoeschen(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE host SET ordner_id=0 WHERE ordner_id=?`, id); err != nil {
+		return err
+	}
+	if err := mussTreffen(tx.Exec(`DELETE FROM ordner WHERE id=?`, id)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// --- Hosts ---
+
+const hostSpalten = `id,name,adresse,port,benutzer,ordner_id,zugang_id,jump_id,farbe,tags,pfad_folgen,notiz`
+
+func scanHost(sc interface{ Scan(...any) error }) (Host, error) {
+	var h Host
+	var tags string
+	var folgen int
+	err := sc.Scan(&h.ID, &h.Name, &h.Adresse, &h.Port, &h.Benutzer, &h.OrdnerID, &h.ZugangID, &h.JumpID, &h.Farbe, &tags, &folgen, &h.Notiz)
+	h.Tags = splitTags(tags)
+	h.PfadFolgen = folgen != 0
+	return h, err
+}
+
+func (s *Store) Hosts() ([]Host, error) {
+	rows, err := s.db.Query(`SELECT ` + hostSpalten + ` FROM host ORDER BY name COLLATE NOCASE`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Host{}
+	for rows.Next() {
+		h, err := scanHost(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, h)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) Host(id int64) (Host, error) {
+	h, err := scanHost(s.db.QueryRow(`SELECT `+hostSpalten+` FROM host WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return h, ErrNichtGefunden
+	}
+	return h, err
+}
+
+func (s *Store) HostSpeichern(h *Host) error {
+	if h.Port == 0 {
+		h.Port = 22
+	}
+	args := []any{h.Name, h.Adresse, h.Port, h.Benutzer, h.OrdnerID, h.ZugangID, h.JumpID, h.Farbe, joinTags(h.Tags), b2i(h.PfadFolgen), h.Notiz}
+	if h.ID == 0 {
+		r, err := s.db.Exec(`INSERT INTO host(name,adresse,port,benutzer,ordner_id,zugang_id,jump_id,farbe,tags,pfad_folgen,notiz) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, args...)
+		if err != nil {
+			return err
+		}
+		h.ID, _ = r.LastInsertId()
+		return nil
+	}
+	return mussTreffen(s.db.Exec(`UPDATE host SET name=?,adresse=?,port=?,benutzer=?,ordner_id=?,zugang_id=?,jump_id=?,farbe=?,tags=?,pfad_folgen=?,notiz=? WHERE id=?`, append(args, h.ID)...))
+}
+
+func (s *Store) HostLoeschen(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE host SET jump_id=0 WHERE jump_id=?`, id); err != nil {
+		return err
+	}
+	if err := mussTreffen(tx.Exec(`DELETE FROM host WHERE id=?`, id)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// --- Zugaenge ---
+
+const zugangSpalten = `id,name,benutzer,art,oeffentlich,fingerprint,schluessel_typ,passwort_enc,schluessel_enc,passphrase_enc`
+
+func scanZugang(sc interface{ Scan(...any) error }) (Zugang, error) {
+	var z Zugang
+	err := sc.Scan(&z.ID, &z.Name, &z.Benutzer, &z.Art, &z.Oeffentlich, &z.Fingerprint, &z.SchluesselTyp, &z.PasswortEnc, &z.SchluesselEnc, &z.PassphraseEnc)
+	z.HatPasswort = len(z.PasswortEnc) > 0
+	z.HatPassphrase = len(z.PassphraseEnc) > 0
+	return z, err
+}
+
+func (s *Store) Zugaenge() ([]Zugang, error) {
+	rows, err := s.db.Query(`SELECT ` + zugangSpalten + ` FROM zugang ORDER BY name COLLATE NOCASE`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Zugang{}
+	for rows.Next() {
+		z, err := scanZugang(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, z)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) Zugang(id int64) (Zugang, error) {
+	z, err := scanZugang(s.db.QueryRow(`SELECT `+zugangSpalten+` FROM zugang WHERE id=?`, id))
+	if errors.Is(err, sql.ErrNoRows) {
+		return z, ErrNichtGefunden
+	}
+	return z, err
+}
+
+func (s *Store) ZugangSpeichern(z *Zugang) error {
+	args := []any{z.Name, z.Benutzer, z.Art, z.Oeffentlich, z.Fingerprint, z.SchluesselTyp, z.PasswortEnc, z.SchluesselEnc, z.PassphraseEnc}
+	if z.ID == 0 {
+		r, err := s.db.Exec(`INSERT INTO zugang(name,benutzer,art,oeffentlich,fingerprint,schluessel_typ,passwort_enc,schluessel_enc,passphrase_enc) VALUES(?,?,?,?,?,?,?,?,?)`, args...)
+		if err != nil {
+			return err
+		}
+		z.ID, _ = r.LastInsertId()
+		return nil
+	}
+	return mussTreffen(s.db.Exec(`UPDATE zugang SET name=?,benutzer=?,art=?,oeffentlich=?,fingerprint=?,schluessel_typ=?,passwort_enc=?,schluessel_enc=?,passphrase_enc=? WHERE id=?`, append(args, z.ID)...))
+}
+
+func (s *Store) ZugangLoeschen(id int64) error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`UPDATE host SET zugang_id=0 WHERE zugang_id=?`, id); err != nil {
+		return err
+	}
+	if err := mussTreffen(tx.Exec(`DELETE FROM zugang WHERE id=?`, id)); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ZugangNutzung zaehlt die Hosts je Zugang.
+func (s *Store) ZugangNutzung() (map[int64]int, error) {
+	rows, err := s.db.Query(`SELECT zugang_id, COUNT(*) FROM host WHERE zugang_id<>0 GROUP BY zugang_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[int64]int{}
+	for rows.Next() {
+		var id int64
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
+	}
+	return out, rows.Err()
+}
+
+// --- bekannte Host-Schluessel ---
+
+func (s *Store) Bekannt(ziel string) (BekannterHost, error) {
+	var b BekannterHost
+	var seit int64
+	err := s.db.QueryRow(`SELECT ziel,typ,schluessel,fingerprint,seit FROM bekannt WHERE ziel=?`, ziel).Scan(&b.Ziel, &b.Typ, &b.Schluessel, &b.Fingerprint, &seit)
+	if errors.Is(err, sql.ErrNoRows) {
+		return b, ErrNichtGefunden
+	}
+	b.Seit = time.Unix(seit, 0)
+	return b, err
+}
+
+func (s *Store) BekanntSetzen(b BekannterHost) error {
+	_, err := s.db.Exec(`INSERT INTO bekannt(ziel,typ,schluessel,fingerprint,seit) VALUES(?,?,?,?,?)
+ON CONFLICT(ziel) DO UPDATE SET typ=excluded.typ,schluessel=excluded.schluessel,fingerprint=excluded.fingerprint,seit=excluded.seit`,
+		b.Ziel, b.Typ, b.Schluessel, b.Fingerprint, time.Now().Unix())
+	return err
+}
+
+func (s *Store) BekannteHosts() ([]BekannterHost, error) {
+	rows, err := s.db.Query(`SELECT ziel,typ,schluessel,fingerprint,seit FROM bekannt ORDER BY ziel`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []BekannterHost{}
+	for rows.Next() {
+		var b BekannterHost
+		var seit int64
+		if err := rows.Scan(&b.Ziel, &b.Typ, &b.Schluessel, &b.Fingerprint, &seit); err != nil {
+			return nil, err
+		}
+		b.Seit = time.Unix(seit, 0)
+		out = append(out, b)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) BekanntLoeschen(ziel string) error {
+	return mussTreffen(s.db.Exec(`DELETE FROM bekannt WHERE ziel=?`, ziel))
+}
+
+// --- Snippets ---
+
+func (s *Store) Snippets() ([]Snippet, error) {
+	rows, err := s.db.Query(`SELECT id,name,befehl,beschreibung FROM snippet ORDER BY name COLLATE NOCASE`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []Snippet{}
+	for rows.Next() {
+		var sn Snippet
+		if err := rows.Scan(&sn.ID, &sn.Name, &sn.Befehl, &sn.Beschreibung); err != nil {
+			return nil, err
+		}
+		out = append(out, sn)
+	}
+	return out, rows.Err()
+}
+
+func (s *Store) SnippetSpeichern(sn *Snippet) error {
+	if sn.ID == 0 {
+		r, err := s.db.Exec(`INSERT INTO snippet(name,befehl,beschreibung) VALUES(?,?,?)`, sn.Name, sn.Befehl, sn.Beschreibung)
+		if err != nil {
+			return err
+		}
+		sn.ID, _ = r.LastInsertId()
+		return nil
+	}
+	return mussTreffen(s.db.Exec(`UPDATE snippet SET name=?,befehl=?,beschreibung=? WHERE id=?`, sn.Name, sn.Befehl, sn.Beschreibung, sn.ID))
+}
+
+func (s *Store) SnippetLoeschen(id int64) error {
+	return mussTreffen(s.db.Exec(`DELETE FROM snippet WHERE id=?`, id))
+}
+
+// --- Hilfen ---
+
+func mussTreffen(r sql.Result, err error) error {
+	if err != nil {
+		return err
+	}
+	if n, _ := r.RowsAffected(); n == 0 {
+		return ErrNichtGefunden
+	}
+	return nil
+}
+
+func splitTags(s string) []string {
+	out := []string{}
+	for _, t := range strings.Split(s, ",") {
+		if t = strings.TrimSpace(t); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func joinTags(t []string) string {
+	clean := make([]string, 0, len(t))
+	for _, x := range t {
+		x = strings.TrimSpace(strings.ReplaceAll(x, ",", " "))
+		if x != "" {
+			clean = append(clean, x)
+		}
+	}
+	return strings.Join(clean, ",")
+}
+
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
+}

@@ -1,0 +1,29 @@
+# ssh-app starten:   docker compose up -d --build
+# Danach im Browser: https://<adresse-dieses-rechners>:8443
+services:
+  ssh-app:
+    build: .
+    image: ssh-app:latest
+    container_name: ssh-app
+    restart: unless-stopped
+    ports:
+      - "8443:8443"
+    volumes:
+      - ssh-app-daten:/data
+    environment:
+      # Minuten ohne Bedienung, bis der Tresor sich sperrt
+      SSHAPP_LEERLAUF_MIN: "30"
+      # Hinter einem Reverse-Proxy mit eigenem Zertifikat: SSHAPP_TLS "aus" und SSHAPP_COOKIE_SECURE "1"
+      # SSHAPP_TLS: "aus"
+      # SSHAPP_COOKIE_SECURE: "1"
+    stop_grace_period: 10s
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  ssh-app-daten:

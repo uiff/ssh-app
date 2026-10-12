@@ -1,0 +1,7 @@
+# Laufzeitdaten (Datenbank, Zertifikat, tldr-Archive) nie einchecken
+/data/
+*.db
+*.db-shm
+*.db-wal
+/ssh-app
+/tmp/

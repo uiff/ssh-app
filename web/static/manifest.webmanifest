@@ -1,0 +1,10 @@
+{
+  "name": "SSH-App",
+  "short_name": "SSH-App",
+  "description": "Web-SSH-Client mit Tresor, Dateileiste und Befehlshilfe",
+  "start_url": "./",
+  "display": "standalone",
+  "background_color": "#0E1013",
+  "theme_color": "#151920",
+  "icons": [{ "src": "img/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}
