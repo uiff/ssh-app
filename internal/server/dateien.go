@@ -8,7 +8,6 @@ import (
 	"log"
 	"mime"
 	"net/http"
-	"net/url"
 	"os"
 	"path"
 	"sort"
@@ -20,12 +19,16 @@ import (
 	"github.com/pkg/sftp"
 
 	"github.com/uiff/ssh-app/internal/term"
+	"github.com/uiff/ssh-app/internal/texte"
 )
 
 type eintrag struct {
-	Name      string    `json:"name"`
-	Ordner    bool      `json:"ordner"`
-	Link      bool      `json:"link,omitempty"`
+	Name   string `json:"name"`
+	Ordner bool   `json:"ordner"`
+	Link   bool   `json:"link,omitempty"`
+	// Art: datei | ordner | geraet | pipe | socket | andere (Verknuepfung ohne Ziel).
+	// Bei einer Verknuepfung die Art des Ziels. Nur «datei» laesst sich herunterladen.
+	Art       string    `json:"art"`
 	Groesse   int64     `json:"groesse"`
 	Rechte    string    `json:"rechte"`
 	Geaendert time.Time `json:"geaendert"`
@@ -34,13 +37,28 @@ type eintrag struct {
 // posixRename ersetzt ein vorhandenes Ziel in einem Schritt (OpenSSH-Erweiterung).
 const posixRename = "posix-rename@openssh.com"
 
-// sftpMeldung ist ein Fehler mit fertigem Satz fuer die Oberflaeche.
-type sftpMeldung struct {
-	code int
-	text string
+// dateiFehler ist ein Fehler mit HTTP-Code und uebersetzbarem Satz fuer die Oberflaeche.
+// gesperrt: Beim Hochladen ist der Name durch einen Ordner oder eine Spezialdatei belegt
+// (wird wie ein Konflikt gesammelt, der Auftrag laeuft weiter).
+type dateiFehler struct {
+	code     int
+	m        *texte.Meldung
+	gesperrt bool
 }
 
-func (m *sftpMeldung) Error() string { return m.text }
+func (f *dateiFehler) Error() string { return f.m.Error() }
+func (f *dateiFehler) Unwrap() error { return f.m }
+
+func meldung(code int, schluessel string, werte ...any) *dateiFehler {
+	return &dateiFehler{code: code, m: texte.Neu(schluessel, werte...)}
+}
+
+// mit haengt den technischen Grund an (nur fuers Log und errors.Is).
+func (f *dateiFehler) mit(err error) *dateiFehler {
+	k := *f
+	k.m = f.m.MitUrsache(err)
+	return &k
+}
 
 // errDateiVorhanden: Der Name ist am Ziel schon belegt und darf nicht ersetzt werden.
 var errDateiVorhanden = errors.New("gibt es schon")
@@ -52,12 +70,19 @@ var errUebertragungAbgebrochen = errors.New("Übertragung vom Browser abgebroche
 func (s *Server) sftpFuer(w http.ResponseWriter, r *http.Request) (*term.Sitzung, *sftp.Client, bool) {
 	sz, ok := s.tm.Hole(r.PathValue("id"))
 	if !ok {
-		fehler(w, http.StatusNotFound, "Sitzung existiert nicht mehr")
+		fehlerT(w, r, http.StatusNotFound, "dateien.sitzungFehlt")
 		return nil, nil, false
 	}
 	c, err := sz.SFTP()
 	if err != nil {
-		fehler(w, http.StatusBadGateway, err.Error())
+		var m *texte.Meldung
+		switch {
+		case errors.As(err, &m): // z.B. term.ErrKeinSFTP
+			fehlerAus(w, r, http.StatusBadGateway, err)
+		default:
+			log.Printf("SFTP: %v", err)
+			fehlerT(w, r, http.StatusBadGateway, "dateien.sitzungBeendet")
+		}
 		return nil, nil, false
 	}
 	return sz, c, true
@@ -65,59 +90,89 @@ func (s *Server) sftpFuer(w http.ResponseWriter, r *http.Request) (*term.Sitzung
 
 func sauberPfad(p string) (string, error) {
 	if p == "" || !strings.HasPrefix(p, "/") || strings.ContainsRune(p, 0) {
-		return "", errors.New("Pfad muss absolut sein")
+		return "", meldung(http.StatusBadRequest, "dateien.pfadAbsolut")
 	}
 	return path.Clean(p), nil
 }
 
-// sftpText uebersetzt einen SFTP-Fehler in einen verstaendlichen Satz. Der rohe Text
-// (z.B. «sftp: "Failure" (SSH_FX_FAILURE)») geht nur ins Server-Log.
-func sftpText(err error) (int, string) {
-	var m *sftpMeldung
+// sftpText uebersetzt einen SFTP-Fehler in einen verstaendlichen Satz in der Sprache der
+// Anfrage. Der rohe Text (z.B. «sftp: "Failure" (SSH_FX_FAILURE)») geht nur ins Server-Log.
+func sftpText(sprache string, err error) (int, string) {
+	var f *dateiFehler
+	var m *texte.Meldung
 	var se *sftp.StatusError
+	t := func(code int, schluessel string) (int, string) { return code, texte.T(sprache, schluessel) }
 	switch {
+	case errors.As(err, &f):
+		return f.code, f.m.Text(sprache)
 	case errors.As(err, &m):
-		return m.code, m.text
+		return http.StatusBadRequest, m.Text(sprache)
 	case errors.Is(err, os.ErrNotExist):
-		return http.StatusNotFound, "Datei oder Ordner gibt es dort nicht (mehr)"
+		return t(http.StatusNotFound, "dateien.sftp.fehlt")
 	case errors.Is(err, os.ErrPermission):
-		return http.StatusForbidden, "Keine Berechtigung — der angemeldete Benutzer darf das dort nicht"
+		return t(http.StatusForbidden, "dateien.sftp.keinRecht")
 	case errors.Is(err, os.ErrExist):
-		return http.StatusConflict, "Gibt es dort schon"
+		return t(http.StatusConflict, "dateien.sftp.vorhanden")
 	case errors.Is(err, sftp.ErrSSHFxConnectionLost), errors.Is(err, sftp.ErrSSHFxNoConnection),
 		errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
 		log.Printf("SFTP: %v", err)
-		return http.StatusBadGateway, "Verbindung zum Host unterbrochen — bitte neu verbinden"
+		return t(http.StatusBadGateway, "dateien.sftp.verbindung")
 	case errors.As(err, &se):
 		log.Printf("SFTP: %v", err)
 		switch se.FxCode() {
 		case sftp.ErrSSHFxOpUnsupported:
-			return http.StatusBadGateway, "Das unterstützt der SFTP-Dienst dieses Hosts nicht"
+			return t(http.StatusBadGateway, "dateien.sftp.nichtUnterstuetzt")
 		case sftp.ErrSSHFxBadMessage:
-			return http.StatusBadGateway, "Der SFTP-Dienst des Hosts hat die Anfrage nicht verstanden"
+			return t(http.StatusBadGateway, "dateien.sftp.nichtVerstanden")
 		case sftp.ErrSSHFxConnectionLost, sftp.ErrSSHFxNoConnection:
-			return http.StatusBadGateway, "Verbindung zum Host unterbrochen — bitte neu verbinden"
+			return t(http.StatusBadGateway, "dateien.sftp.verbindung")
 		}
-		return http.StatusBadGateway, "Der Host hat das abgelehnt, ohne einen Grund zu nennen (Datenträger voll, Datei in Benutzung oder schon vorhanden?)"
+		return t(http.StatusBadGateway, "dateien.sftp.abgelehnt")
 	}
 	log.Printf("SFTP: %v", err)
-	return http.StatusBadGateway, "Dateizugriff auf dem Host fehlgeschlagen"
+	return t(http.StatusBadGateway, "dateien.sftp.fehler")
 }
 
-func sftpFehler(w http.ResponseWriter, err error) {
-	code, text := sftpText(err)
+func sftpFehler(w http.ResponseWriter, r *http.Request, err error) {
+	code, text := sftpText(texte.AusAnfrage(r), err)
 	fehler(w, code, text)
+}
+
+// zitatListe setzt Namen in die Anfuehrungszeichen der Sprache: «a», «b» bzw. “a”, “b”.
+func zitatListe(sprache string, namen []string) string {
+	teile := make([]string, len(namen))
+	for i, n := range namen {
+		teile[i] = texte.T(sprache, "dateien.zitat", n)
+	}
+	return strings.Join(teile, ", ")
 }
 
 // dateienPfad liefert das Arbeitsverzeichnis der Shell (fuer «folgt Terminal»).
 func (s *Server) dateienPfad(w http.ResponseWriter, r *http.Request) {
 	sz, ok := s.tm.Hole(r.PathValue("id"))
 	if !ok {
-		fehler(w, http.StatusNotFound, "Sitzung existiert nicht mehr")
+		fehlerT(w, r, http.StatusNotFound, "dateien.sitzungFehlt")
 		return
 	}
 	p, bekannt := sz.Arbeitsverzeichnis()
 	jsonAntwort(w, http.StatusOK, map[string]any{"pfad": p, "bekannt": bekannt})
+}
+
+// dateiArt ordnet eine Dateiart fuer die Liste ein (siehe eintrag.Art).
+func dateiArt(m os.FileMode) string {
+	switch {
+	case m.IsDir():
+		return "ordner"
+	case m.IsRegular():
+		return "datei"
+	case m&os.ModeDevice != 0:
+		return "geraet"
+	case m&os.ModeNamedPipe != 0:
+		return "pipe"
+	case m&os.ModeSocket != 0:
+		return "socket"
+	}
+	return "andere"
 }
 
 func (s *Server) dateienListe(w http.ResponseWriter, r *http.Request) {
@@ -129,32 +184,36 @@ func (s *Server) dateienListe(w http.ResponseWriter, r *http.Request) {
 	if p == "" {
 		wd, err := c.Getwd()
 		if err != nil {
-			sftpFehler(w, err)
+			sftpFehler(w, r, err)
 			return
 		}
 		p = wd
 	}
 	p, err := sauberPfad(p)
 	if err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		sftpFehler(w, r, err)
 		return
 	}
 	infos, err := c.ReadDir(p)
 	if err != nil {
 		if fi, e := c.Stat(p); e == nil && !fi.IsDir() {
-			fehler(w, http.StatusBadRequest, "«"+p+"» ist kein Ordner")
+			fehlerT(w, r, http.StatusBadRequest, "dateien.keinOrdner", p)
 			return
 		}
-		sftpFehler(w, err)
+		sftpFehler(w, r, err)
 		return
 	}
 	out := make([]eintrag, 0, len(infos))
 	for _, fi := range infos {
-		e := eintrag{Name: fi.Name(), Ordner: fi.IsDir(), Groesse: fi.Size(), Rechte: fi.Mode().Perm().String(), Geaendert: fi.ModTime()}
+		e := eintrag{Name: fi.Name(), Ordner: fi.IsDir(), Art: dateiArt(fi.Mode()), Groesse: fi.Size(), Rechte: fi.Mode().Perm().String(), Geaendert: fi.ModTime()}
 		if fi.Mode()&os.ModeSymlink != 0 {
 			e.Link = true
-			if ziel, err := c.Stat(path.Join(p, fi.Name())); err == nil && ziel.IsDir() {
-				e.Ordner = true
+			e.Art = "andere" // Ziel fehlt oder ist nicht lesbar
+			if ziel, err := c.Stat(path.Join(p, fi.Name())); err == nil {
+				e.Ordner, e.Art = ziel.IsDir(), dateiArt(ziel.Mode())
+				if ziel.Mode().IsRegular() {
+					e.Groesse = ziel.Size()
+				}
 			}
 		}
 		out = append(out, e)
@@ -178,6 +237,24 @@ func pseudoDatei(p string) bool {
 	return false
 }
 
+// echterPfad loest Verknuepfungen auf: RealPath (OpenSSH loest dabei alle Stufen auf) und
+// danach die letzte Stufe von Hand (fuer SFTP-Dienste, deren RealPath nur saeubert).
+// So erkennt dateiLaden auch eine Verknuepfung nach /proc als Pseudodatei.
+func echterPfad(c *sftp.Client, p string) string {
+	if rp, err := c.RealPath(p); err == nil && strings.HasPrefix(rp, "/") {
+		p = path.Clean(rp)
+	}
+	if fi, err := c.Lstat(p); err == nil {
+		if z, _, err := linkAufloesen(c, p, fi); err == nil {
+			p = z
+		}
+	}
+	return p
+}
+
+// dateiLaden schickt eine Datei als Download. Mit «pruefen=1» nur die Pruefung (gibt es
+// die Datei, ist sie gewoehnlich und lesbar?) als JSON: Ein Download per Link zeigt eine
+// Fehlerantwort nicht an, deshalb fragt der Browser vorher so nach.
 func (s *Server) dateiLaden(w http.ResponseWriter, r *http.Request) {
 	_, c, ok := s.sftpFuer(w, r)
 	if !ok {
@@ -185,35 +262,39 @@ func (s *Server) dateiLaden(w http.ResponseWriter, r *http.Request) {
 	}
 	p, err := sauberPfad(r.URL.Query().Get("pfad"))
 	if err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		sftpFehler(w, r, err)
 		return
 	}
 	// Erst pruefen, dann oeffnen: Eine Pipe (FIFO) wuerde beim Oeffnen haengen bleiben.
 	fi, err := c.Stat(p)
 	if err != nil {
-		sftpFehler(w, err)
+		sftpFehler(w, r, err)
 		return
 	}
 	if fi.IsDir() {
-		fehler(w, http.StatusBadRequest, "Ordner lassen sich nicht herunterladen")
+		fehlerT(w, r, http.StatusBadRequest, "dateien.laden.ordner")
 		return
 	}
 	if !fi.Mode().IsRegular() {
-		fehler(w, http.StatusBadRequest, "Nur gewöhnliche Dateien lassen sich herunterladen (das ist ein Gerät, eine Pipe oder ein Socket)")
+		fehlerT(w, r, http.StatusBadRequest, "dateien.laden.keineDatei")
 		return
 	}
 	f, err := c.Open(p)
 	if err != nil {
-		sftpFehler(w, err)
+		sftpFehler(w, r, err)
 		return
 	}
 	defer f.Close()
+	if r.URL.Query().Get("pruefen") == "1" {
+		jsonAntwort(w, http.StatusOK, map[string]any{"ok": true, "groesse": fi.Size()})
+		return
+	}
 	name := path.Base(p)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name}))
 	// Laenge nur angeben, wenn sie stimmt: Sonst kaeme eine leere (Groesse 0) oder eine
 	// abgebrochene Datei (zu grosse Angabe) an. Ohne Angabe streamt net/http «chunked».
-	if fi.Size() > 0 && !pseudoDatei(p) {
+	if fi.Size() > 0 && !pseudoDatei(p) && !pseudoDatei(echterPfad(c, p)) {
 		w.Header().Set("Content-Length", strconv.FormatInt(fi.Size(), 10))
 	}
 	if _, err := io.Copy(w, f); err != nil {
@@ -221,21 +302,22 @@ func (s *Server) dateiLaden(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// dateiHochladen streamt jede Datei per SFTP in eine temporaere Datei neben dem Ziel und
-// benennt sie erst nach vollstaendiger Uebertragung um. Ein Abbruch (Funkloch, Tab zu)
-// hinterlaesst so weder ein Bruchstueck unter dem richtigen Namen noch ein zerstoertes
-// Original. Vorhandene Dateien werden nur ersetzt, wenn ihr Name als «ersetzen=<name>»
-// mitkommt (je Datei bestaetigt). Andere Namenskonflikte werden uebersprungen und gesammelt
-// gemeldet: 409 mit «vorhanden» (alle Konflikte) und «hochgeladen» (was geklappt hat).
+// dateiHochladen streamt jede Datei per SFTP in eine temporaere Datei neben dem Ziel. Ein
+// Abbruch (Funkloch, Tab zu) hinterlaesst so weder ein Bruchstueck unter dem richtigen
+// Namen noch ein zerstoertes Original. Vorhandene Dateien werden nur ersetzt, wenn ihr Name
+// als «ersetzen=<name>» mitkommt (je Datei bestaetigt). Andere Namenskonflikte werden
+// uebersprungen und gesammelt gemeldet: 409 mit «vorhanden» (ersetzbar nach Rueckfrage),
+// «gesperrt» (Ordner oder Spezialdatei, nicht ersetzbar) und «hochgeladen» (was geklappt hat).
 func (s *Server) dateiHochladen(w http.ResponseWriter, r *http.Request) {
 	_, c, ok := s.sftpFuer(w, r)
 	if !ok {
 		return
 	}
+	sprache := texte.AusAnfrage(r)
 	q := r.URL.Query()
 	ziel, err := sauberPfad(q.Get("pfad"))
 	if err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		sftpFehler(w, r, err)
 		return
 	}
 	ersetzen := map[string]bool{}
@@ -244,10 +326,11 @@ func (s *Server) dateiHochladen(w http.ResponseWriter, r *http.Request) {
 	}
 	mr, err := r.MultipartReader()
 	if err != nil {
-		fehler(w, http.StatusBadRequest, "Erwarte multipart/form-data")
+		fehlerT(w, r, http.StatusBadRequest, "dateien.hochladen.multipart")
 		return
 	}
-	fertig, vorhanden := []string{}, []string{}
+	fertig, vorhanden, gesperrt := []string{}, []string{}, []string{}
+	var gesperrtText string
 	abbruch := func(code int, text string) {
 		jsonAntwort(w, code, map[string]any{"fehler": text, "hochgeladen": fertig})
 	}
@@ -258,7 +341,7 @@ func (s *Server) dateiHochladen(w http.ResponseWriter, r *http.Request) {
 		}
 		if err != nil {
 			log.Printf("Hochladen nach %s abgebrochen: %v", ziel, err)
-			abbruch(http.StatusBadRequest, "Übertragung abgebrochen")
+			abbruch(http.StatusBadRequest, texte.T(sprache, "dateien.hochladen.abgebrochen"))
 			return
 		}
 		name := path.Base(strings.ReplaceAll(teil.FileName(), "\\", "/"))
@@ -268,26 +351,44 @@ func (s *Server) dateiHochladen(w http.ResponseWriter, r *http.Request) {
 		}
 		err = hochladenEine(c, ziel, name, ersetzen[name], teil)
 		teil.Close()
+		var df *dateiFehler
 		switch {
 		case err == nil:
 			fertig = append(fertig, name)
 		case errors.Is(err, errDateiVorhanden):
 			vorhanden = append(vorhanden, name)
+		case errors.As(err, &df) && df.gesperrt:
+			gesperrt = append(gesperrt, name)
+			gesperrtText = df.m.Text(sprache)
+		case errors.As(err, &df):
+			// Eigene Saetze nennen den Namen schon.
+			abbruch(df.code, df.m.Text(sprache))
+			return
 		case errors.Is(err, errUebertragungAbgebrochen):
-			abbruch(http.StatusBadRequest, "Übertragung abgebrochen — «"+name+"» wurde nicht gespeichert")
+			abbruch(http.StatusBadRequest, texte.T(sprache, "dateien.hochladen.nichtGespeichert", name))
 			return
 		default:
-			code, text := sftpText(err)
-			abbruch(code, "«"+name+"»: "+text)
+			code, text := sftpText(sprache, err)
+			abbruch(code, texte.T(sprache, "dateien.hochladen.fehlerBei", name, text))
 			return
 		}
 	}
-	if len(vorhanden) > 0 {
-		text := "«" + vorhanden[0] + "» gibt es dort schon"
-		if len(vorhanden) > 1 {
-			text = "Schon vorhanden: «" + strings.Join(vorhanden, "», «") + "»"
+	if len(vorhanden)+len(gesperrt) > 0 {
+		var saetze []string
+		switch {
+		case len(vorhanden) == 1:
+			saetze = append(saetze, texte.T(sprache, "dateien.vorhanden", vorhanden[0]))
+		case len(vorhanden) > 1:
+			saetze = append(saetze, texte.T(sprache, "dateien.hochladen.vorhandenMehrere", zitatListe(sprache, vorhanden)))
 		}
-		jsonAntwort(w, http.StatusConflict, map[string]any{"fehler": text, "vorhanden": vorhanden, "hochgeladen": fertig})
+		switch {
+		case len(gesperrt) == 1:
+			saetze = append(saetze, gesperrtText)
+		case len(gesperrt) > 1:
+			saetze = append(saetze, texte.T(sprache, "dateien.hochladen.gesperrtMehrere", zitatListe(sprache, gesperrt)))
+		}
+		jsonAntwort(w, http.StatusConflict, map[string]any{"fehler": strings.Join(saetze, ". "),
+			"vorhanden": vorhanden, "gesperrt": gesperrt, "hochgeladen": fertig})
 		return
 	}
 	jsonAntwort(w, http.StatusOK, map[string]any{"hochgeladen": fertig})
@@ -312,24 +413,30 @@ func (l *leseWaechter) Read(p []byte) (int, error) {
 }
 
 // linkAufloesen folgt symbolischen Verknuepfungen (hoechstens 16 Stufen) und liefert den
-// Pfad des eigentlichen Ziels. So ersetzt ein Hochladen wie frueher den Inhalt hinter der
-// Verknuepfung und nicht die Verknuepfung selbst. Fehlt das Ziel, bleibt der Pfad stehen.
-func linkAufloesen(c *sftp.Client, p string, fi os.FileInfo) (string, os.FileInfo) {
+// Pfad des eigentlichen Ziels. So ersetzt ein Hochladen den Inhalt hinter der Verknuepfung
+// und nicht die Verknuepfung selbst. Fehlt das Ziel, kommt sein Pfad mit fi == nil (wie
+// «cp» legt das Hochladen es dann an). Bleibt nach 16 Stufen eine Verknuepfung, kommt sie
+// selbst zurueck (keine gewoehnliche Datei).
+func linkAufloesen(c *sftp.Client, p string, fi os.FileInfo) (string, os.FileInfo, error) {
 	for i := 0; i < 16 && fi.Mode()&os.ModeSymlink != 0; i++ {
 		z, err := c.ReadLink(p)
 		if err != nil {
-			break
+			return p, fi, err
 		}
 		if !strings.HasPrefix(z, "/") {
 			z = path.Join(path.Dir(p), z)
 		}
+		z = path.Clean(z)
 		zfi, err := c.Lstat(z)
-		if err != nil {
-			break
+		if errors.Is(err, os.ErrNotExist) {
+			return z, nil, nil
 		}
-		p, fi = path.Clean(z), zfi
+		if err != nil {
+			return p, fi, err
+		}
+		p, fi = z, zfi
 	}
-	return p, fi
+	return p, fi, nil
 }
 
 // kuerzen schneidet s auf hoechstens n Bytes, ohne ein UTF-8-Zeichen zu zerteilen
@@ -350,84 +457,227 @@ func zufallsEndung() string {
 	return hex.EncodeToString(b)
 }
 
-// hochladenEine schreibt eine Datei nach ordner/name: erst in «.name.<zufall>.sshapp-upload»,
-// nach vollstaendiger Uebertragung umbenennen. Bei jedem Fehler wird die temporaere Datei
-// entfernt, ein vorhandenes Original bleibt unberuehrt.
-func hochladenEine(c *sftp.Client, ordner, name string, ersetzen bool, quelle io.Reader) error {
-	dateiPfad := path.Join(ordner, name)
-	ersetzt := false        // ein vorhandenes Ziel wird (mit Erlaubnis) ersetzt
-	var vorlage os.FileInfo // Rechte und Besitzer, die die neue Datei uebernimmt
-	fi, err := c.Lstat(dateiPfad)
-	switch {
-	case err == nil:
-		if !ersetzen {
-			return errDateiVorhanden
-		}
-		dateiPfad, fi = linkAufloesen(c, dateiPfad, fi)
-		if fi.IsDir() {
-			return &sftpMeldung{http.StatusConflict, "«" + name + "» ist dort ein Ordner und lässt sich nicht durch eine Datei ersetzen"}
-		}
-		ersetzt = true
-		if fi.Mode().IsRegular() {
-			vorlage = fi
-		}
-	case !errors.Is(err, os.ErrNotExist):
-		return err
-	}
+// nebenName liefert einen freien Namen neben p: «.<name>.<zufall>.sshapp-<art>».
+func nebenName(p, art string) string {
+	return path.Join(path.Dir(p), "."+kuerzen(path.Base(p), 180)+"."+zufallsEndung()+".sshapp-"+art)
+}
 
-	tmp := path.Join(path.Dir(dateiPfad), "."+kuerzen(path.Base(dateiPfad), 180)+"."+zufallsEndung()+".sshapp-upload")
-	f, err := c.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
-	if err != nil {
-		return err
+// entfernen raeumt eine Hilfsdatei weg; scheitert das, steht es im Log.
+func entfernen(c *sftp.Client, p string) {
+	if err := c.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
+		log.Printf("Hilfsdatei %s bleibt liegen: %v", p, err)
 	}
+}
+
+// uebertragen schreibt den Browser-Strom in f und schliesst f.
+func uebertragen(f *sftp.File, quelle io.Reader, ziel string) error {
 	leser := &leseWaechter{r: quelle}
 	// Gleichzeitige Schreibauftraege sind hier unbedenklich: Bei einem Fehler wird die
-	// temporaere Datei ohnehin verworfen, Luecken darin spielen keine Rolle.
-	_, err = f.ReadFromWithConcurrency(leser, 0)
+	// Datei ohnehin verworfen, Luecken darin spielen keine Rolle.
+	_, err := f.ReadFromWithConcurrency(leser, 0)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
 	if leser.err != nil {
-		log.Printf("Hochladen %s abgebrochen: %v", dateiPfad, leser.err)
-		err = errUebertragungAbgebrochen
+		log.Printf("Hochladen %s abgebrochen: %v", ziel, leser.err)
+		return errUebertragungAbgebrochen
 	}
-	if err == nil && vorlage != nil {
-		// Rechte und (soweit erlaubt) Besitzer des Originals uebernehmen.
-		if st, ok := vorlage.Sys().(*sftp.FileStat); ok {
-			_ = c.Chown(tmp, int(st.UID), int(st.GID))
-		}
-		_ = c.Chmod(tmp, vorlage.Mode().Perm())
-	}
-	if err == nil {
-		if ersetzt {
-			err = ersetzendUmbenennen(c, tmp, dateiPfad)
-		} else if _, e := c.Lstat(dateiPfad); e == nil {
-			// Waehrend der Uebertragung angelegt: nicht still ueberschreiben.
-			err = errDateiVorhanden
-		} else {
-			// SSH_FXP_RENAME ersetzt bei OpenSSH nie ein vorhandenes Ziel.
-			err = c.Rename(tmp, dateiPfad)
-		}
+	return err
+}
+
+// hochladenEine schreibt eine Datei nach ordner/name. Eine neue Datei entsteht erst als
+// «.name.<zufall>.sshapp-upload» und bekommt nach vollstaendiger Uebertragung ihren Namen.
+// Ersetzen (nur mit Erlaubnis) siehe ersetzenMit.
+func hochladenEine(c *sftp.Client, ordner, name string, ersetzen bool, quelle io.Reader) error {
+	dateiPfad := path.Join(ordner, name)
+	fi, err := c.Lstat(dateiPfad)
+	if errors.Is(err, os.ErrNotExist) {
+		return neuAnlegen(c, dateiPfad, quelle)
 	}
 	if err != nil {
-		if rerr := c.Remove(tmp); rerr != nil && !errors.Is(rerr, os.ErrNotExist) {
-			log.Printf("Temporäre Datei %s bleibt liegen: %v", tmp, rerr)
-		}
+		return err
+	}
+	// Ordner und Spezialdateien lassen sich nie ersetzen: gar nicht erst nachfragen lassen.
+	ziel, zfi, err := linkAufloesen(c, dateiPfad, fi)
+	switch {
+	case err != nil:
+		return err
+	case zfi != nil && zfi.IsDir():
+		f := meldung(http.StatusConflict, "dateien.hochladen.istOrdner", name)
+		f.gesperrt = true
+		return f
+	case zfi != nil && !zfi.Mode().IsRegular():
+		f := meldung(http.StatusConflict, "dateien.hochladen.keineDatei", name)
+		f.gesperrt = true
+		return f
+	case !ersetzen:
+		return errDateiVorhanden
+	case zfi == nil:
+		return neuAnlegen(c, ziel, quelle) // Verknuepfung ohne Ziel: Ziel anlegen (wie cp)
+	}
+	return ersetzenMit(c, ziel, zfi, name, quelle)
+}
+
+// neuAnlegen: temporaere Datei schreiben, dann umbenennen. SSH_FXP_RENAME ersetzt bei
+// OpenSSH nie ein vorhandenes Ziel.
+func neuAnlegen(c *sftp.Client, ziel string, quelle io.Reader) error {
+	tmp := nebenName(ziel, "upload")
+	f, err := c.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+	if err != nil {
+		return err
+	}
+	if err := uebertragen(f, quelle, ziel); err != nil {
+		entfernen(c, tmp)
+		return err
+	}
+	if _, e := c.Lstat(ziel); e == nil {
+		// Waehrend der Uebertragung angelegt: nicht still ueberschreiben.
+		entfernen(c, tmp)
+		return errDateiVorhanden
+	}
+	if err := c.Rename(tmp, ziel); err != nil {
+		entfernen(c, tmp)
 		return err
 	}
 	return nil
 }
 
-// ersetzendUmbenennen ersetzt nach durch von: in einem Schritt per posix-rename; kennt der
-// Host die Erweiterung nicht, erst das alte Ziel loeschen und dann umbenennen.
+// ersetzenMit ersetzt den Inhalt der gewoehnlichen Datei ziel (vorlage = ihr Lstat).
+//
+// Die Datei selbst bleibt erhalten: Besitzer, Gruppe, Rechte, ACLs, harte Verknuepfungen
+// und per Docker eingebundene Einzeldateien sehen den neuen Inhalt. Dazu kommt der Strom
+// erst vollstaendig in eine temporaere Datei (ein Abbruch laesst das Original stehen) und
+// wird danach auf dem Host in die Datei kopiert.
+//
+//   - Darf der Benutzer die Datei nicht schreiben: abgelehnt (wie frueher «permission denied»),
+//     bevor etwas uebertragen wird.
+//   - Laesst sie sich nicht zum Schreiben oeffnen, ohne dass Rechte fehlen (z.B. «Text file
+//     busy» bei einem laufenden Programm): temporaere Datei mit Rechten und Besitzer der
+//     Vorlage, dann ersetzend umbenennen.
+//   - Fehlt im Ordner das Schreibrecht fuer die temporaere Datei: wie frueher direkt in die
+//     Datei schreiben (ein Abbruch hinterlaesst sie dann unvollstaendig).
+func ersetzenMit(c *sftp.Client, ziel string, vorlage os.FileInfo, name string, quelle io.Reader) error {
+	// Oeffnen ohne O_TRUNC aendert nichts an der Datei.
+	vorOrt := true
+	probe, err := c.OpenFile(ziel, os.O_WRONLY)
+	switch {
+	case err == nil:
+		probe.Close()
+	case errors.Is(err, os.ErrPermission):
+		return meldung(http.StatusForbidden, "dateien.hochladen.keinSchreibrecht", name).mit(err)
+	case errors.Is(err, os.ErrNotExist):
+		return err
+	default:
+		log.Printf("Hochladen: %s nicht beschreibbar (%v), ersetze per Umbenennen", ziel, err)
+		vorOrt = false
+	}
+
+	tmp := nebenName(ziel, "upload")
+	f, err := c.OpenFile(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
+	if err != nil {
+		if vorOrt && errors.Is(err, os.ErrPermission) {
+			return direktSchreiben(c, ziel, name, quelle)
+		}
+		return err
+	}
+	if err := uebertragen(f, quelle, ziel); err != nil {
+		entfernen(c, tmp)
+		return err
+	}
+	if vorOrt {
+		angefangen, err := inhaltEinsetzen(c, tmp, ziel)
+		if err != nil && angefangen {
+			// Das Original ist angeschrieben: die vollstaendige Fassung nicht wegwerfen.
+			log.Printf("Hochladen: %s unvollstaendig, vollstaendig in %s: %v", ziel, tmp, err)
+			code, _ := sftpText(texte.DE, err)
+			return meldung(code, "dateien.hochladen.einsetzenFehler", name, path.Base(tmp)).mit(err)
+		}
+		entfernen(c, tmp)
+		return err
+	}
+	besitzUebernehmen(c, tmp, vorlage)
+	if err := ersetzendUmbenennen(c, tmp, ziel); err != nil {
+		entfernen(c, tmp)
+		return err
+	}
+	return nil
+}
+
+// inhaltEinsetzen kopiert von in die vorhandene Datei nach (auf dem Host, die Datei behaelt
+// Inode, Besitzer und Rechte). angefangen meldet, ob nach schon gekuerzt wurde.
+func inhaltEinsetzen(c *sftp.Client, von, nach string) (angefangen bool, err error) {
+	src, err := c.Open(von)
+	if err != nil {
+		return false, err
+	}
+	defer src.Close()
+	dst, err := c.OpenFile(nach, os.O_WRONLY|os.O_TRUNC)
+	if err != nil {
+		return false, err
+	}
+	_, err = io.Copy(dst, src) // src.WriteTo: liest mit mehreren Anfragen gleichzeitig
+	if cerr := dst.Close(); err == nil {
+		err = cerr
+	}
+	return true, err
+}
+
+// direktSchreiben schreibt den Strom wie frueher direkt in die Datei (Ordner ohne Schreibrecht).
+func direktSchreiben(c *sftp.Client, ziel, name string, quelle io.Reader) error {
+	f, err := c.OpenFile(ziel, os.O_WRONLY|os.O_TRUNC)
+	if err != nil {
+		return err
+	}
+	err = uebertragen(f, quelle, ziel)
+	if errors.Is(err, errUebertragungAbgebrochen) {
+		return meldung(http.StatusBadRequest, "dateien.hochladen.abbruchDirekt", name).mit(err)
+	}
+	return err
+}
+
+// besitzUebernehmen gibt der temporaeren Datei Besitzer, Gruppe und Rechte der Vorlage.
+// Ohne root scheitert chown auf einen fremden Besitzer; dann wenigstens die Gruppe
+// behalten (erlaubt, wenn der Benutzer Mitglied ist). Die Rechte kommen danach, weil
+// chown Set-UID/Set-GID loeschen kann.
+func besitzUebernehmen(c *sftp.Client, tmp string, vorlage os.FileInfo) {
+	if st, ok := vorlage.Sys().(*sftp.FileStat); ok {
+		if err := c.Chown(tmp, int(st.UID), int(st.GID)); err != nil {
+			if eigen, e := c.Lstat(tmp); e == nil {
+				if est, ok := eigen.Sys().(*sftp.FileStat); ok && est.GID != st.GID {
+					if err := c.Chown(tmp, int(est.UID), int(st.GID)); err != nil {
+						log.Printf("Hochladen: Gruppe von %s nicht uebernommen: %v", tmp, err)
+					}
+				}
+			}
+		}
+	}
+	_ = c.Chmod(tmp, vorlage.Mode()&(os.ModePerm|os.ModeSetuid|os.ModeSetgid|os.ModeSticky))
+}
+
+// ersetzendUmbenennen ersetzt nach durch von: in einem Schritt per posix-rename. Kennt der
+// Host die Erweiterung nicht, wird das alte Ziel erst beiseite gelegt und nur bei Erfolg
+// geloescht; scheitert das Umbenennen, kommt es zurueck. So gehen nie beide verloren.
 func ersetzendUmbenennen(c *sftp.Client, von, nach string) error {
 	if _, ok := c.HasExtension(posixRename); ok {
 		return c.PosixRename(von, nach)
 	}
-	if err := c.Remove(nach); err != nil && !errors.Is(err, os.ErrNotExist) {
+	alt := nebenName(nach, "alt")
+	if err := c.Rename(nach, alt); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return c.Rename(von, nach)
+		}
 		return err
 	}
-	return c.Rename(von, nach)
+	if err := c.Rename(von, nach); err != nil {
+		if rerr := c.Rename(alt, nach); rerr != nil {
+			log.Printf("Umbenennen: %s liegt als %s beiseite: %v / %v", nach, alt, err, rerr)
+			code, _ := sftpText(texte.DE, err)
+			return meldung(code, "dateien.umbenennen.originalGesichert", path.Base(nach), path.Base(alt)).mit(err)
+		}
+		return err
+	}
+	entfernen(c, alt)
+	return nil
 }
 
 // zielBelegt prueft, ob nach schon vergeben ist. Aendert sich nur die Gross-/Kleinschreibung,
@@ -462,7 +712,7 @@ func umbenennen(c *sftp.Client, von, nach string, ersetzen bool) error {
 		return nil
 	}
 	if strings.HasPrefix(nach, von+"/") {
-		return &sftpMeldung{http.StatusBadRequest, "Ein Ordner lässt sich nicht in sich selbst verschieben"}
+		return meldung(http.StatusBadRequest, "dateien.umbenennen.inSichSelbst")
 	}
 	ziel, belegt, err := zielBelegt(c, von, nach)
 	if err != nil {
@@ -478,10 +728,10 @@ func umbenennen(c *sftp.Client, von, nach string, ersetzen bool) error {
 		return c.Rename(von, nach)
 	}
 	if !ersetzen {
-		return &sftpMeldung{http.StatusConflict, "«" + path.Base(nach) + "» gibt es dort schon"}
+		return meldung(http.StatusConflict, "dateien.vorhanden", path.Base(nach))
 	}
 	if ziel.IsDir() {
-		return &sftpMeldung{http.StatusConflict, "«" + path.Base(nach) + "» ist ein Ordner und lässt sich nicht ersetzen"}
+		return meldung(http.StatusConflict, "dateien.umbenennen.istOrdner", path.Base(nach))
 	}
 	return ersetzendUmbenennen(c, von, nach)
 }
@@ -498,25 +748,25 @@ func (s *Server) dateiAktion(w http.ResponseWriter, r *http.Request) {
 		Ersetzen bool   `json:"ersetzen"` // umbenennen: vorhandenes Ziel ersetzen (nach Rueckfrage)
 	}
 	if err := lesen(r, &a); err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	p, err := sauberPfad(a.Pfad)
 	if err != nil || p == "/" {
-		fehler(w, http.StatusBadRequest, "Ungültiger Pfad")
+		fehlerT(w, r, http.StatusBadRequest, "dateien.pfadUngueltig")
 		return
 	}
 	switch a.Art {
 	case "ordner":
 		if _, e := c.Lstat(p); e == nil {
-			fehler(w, http.StatusConflict, "«"+path.Base(p)+"» gibt es dort schon")
+			fehlerT(w, r, http.StatusConflict, "dateien.vorhanden", path.Base(p))
 			return
 		}
 		err = c.Mkdir(p)
 	case "umbenennen":
 		nach, e := sauberPfad(a.Nach)
 		if e != nil || nach == "/" {
-			fehler(w, http.StatusBadRequest, "Ungültiger neuer Name")
+			fehlerT(w, r, http.StatusBadRequest, "dateien.nameUngueltig")
 			return
 		}
 		err = umbenennen(c, p, nach, a.Ersetzen)
@@ -530,37 +780,12 @@ func (s *Server) dateiAktion(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	default:
-		fehler(w, http.StatusBadRequest, "Unbekannte Aktion")
+		fehlerT(w, r, http.StatusBadRequest, "dateien.aktionUnbekannt")
 		return
 	}
 	if err != nil {
-		sftpFehler(w, err)
+		sftpFehler(w, r, err)
 		return
 	}
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
-// --- Hilfe ---
-
-func (s *Server) hilfeSuche(w http.ResponseWriter, r *http.Request) {
-	jsonAntwort(w, http.StatusOK, s.hilfe.Suchen(r.URL.Query().Get("q"), 25))
-}
-
-func (s *Server) hilfeSeite(w http.ResponseWriter, r *http.Request) {
-	name, _ := url.PathUnescape(r.PathValue("name"))
-	seite, ok := s.hilfe.Seite(name)
-	if !ok {
-		fehler(w, http.StatusNotFound, "Keine Hilfe zu «"+name+"»")
-		return
-	}
-	jsonAntwort(w, http.StatusOK, seite)
-}
-
-func (s *Server) hilfeErklaeren(w http.ResponseWriter, r *http.Request) {
-	seite, teile, ok := s.hilfe.Erklaeren(r.URL.Query().Get("zeile"))
-	if !ok {
-		jsonAntwort(w, http.StatusOK, map[string]any{"gefunden": false})
-		return
-	}
-	jsonAntwort(w, http.StatusOK, map[string]any{"gefunden": true, "seite": seite, "teile": teile})
 }

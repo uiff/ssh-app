@@ -1,8 +1,9 @@
 package store
 
 import (
-	"errors"
 	"time"
+
+	"github.com/uiff/ssh-app/internal/texte"
 )
 
 // SicherungVersion steigt, wenn sich das Format der Sicherung aendert.
@@ -62,19 +63,20 @@ func (s *Store) Exportieren(tresorKopf []byte, app string) (Sicherung, error) {
 // Pruefen lehnt Dateien ab, die keine Sicherung dieser App sind.
 func (sg Sicherung) Pruefen() error {
 	if sg.Format != SicherungFormat {
-		return errors.New("Die Datei ist keine Sicherung dieser App")
+		return texte.Neu("store.sicherung.fremd")
 	}
 	if sg.Version < 1 || sg.Version > SicherungVersion {
-		return errors.New("Die Sicherung stammt aus einer neueren Version — erst die App aktualisieren")
+		return texte.Neu("store.sicherung.neuer")
 	}
 	if len(sg.TresorKopf) == 0 {
-		return errors.New("Der Sicherung fehlt der Tresor-Kopf")
+		return texte.Neu("store.sicherung.ohne.kopf")
 	}
 	return nil
 }
 
 // Einspielen ersetzt den ganzen Bestand in einer Transaktion (alles oder nichts).
-// IDs bleiben erhalten, damit Verweise (Ordner, Zugang, Jump-Host) stimmen.
+// IDs bleiben erhalten, damit Verweise (Ordner, Zugang) stimmen. Felder, die eine
+// aeltere Version noch kannte, ignoriert das Einlesen der Sicherung.
 func (s *Store) Einspielen(sg Sicherung, kopfSchluessel string) error {
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -101,8 +103,8 @@ func (s *Store) Einspielen(sg Sicherung, kopfSchluessel string) error {
 		if h.Port == 0 {
 			h.Port = 22
 		}
-		if _, err := tx.Exec(`INSERT INTO host(id,name,adresse,port,benutzer,ordner_id,zugang_id,jump_id,farbe,tags,pfad_folgen,notiz,geraet) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			h.ID, h.Name, h.Adresse, h.Port, h.Benutzer, h.OrdnerID, h.ZugangID, h.JumpID, h.Farbe, joinTags(h.Tags), b2i(h.PfadFolgen), h.Notiz, h.Geraet); err != nil {
+		if _, err := tx.Exec(`INSERT INTO host(id,name,adresse,port,benutzer,ordner_id,zugang_id,farbe,tags,pfad_folgen,notiz,geraet) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+			h.ID, h.Name, h.Adresse, h.Port, h.Benutzer, h.OrdnerID, h.ZugangID, h.Farbe, joinTags(h.Tags), b2i(h.PfadFolgen), h.Notiz, h.Geraet); err != nil {
 			return err
 		}
 	}

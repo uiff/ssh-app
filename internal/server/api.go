@@ -16,6 +16,7 @@ import (
 
 	"github.com/uiff/ssh-app/internal/sshx"
 	"github.com/uiff/ssh-app/internal/store"
+	"github.com/uiff/ssh-app/internal/texte"
 	"github.com/uiff/ssh-app/internal/vault"
 )
 
@@ -24,17 +25,17 @@ func pfadID(r *http.Request) int64 {
 	return id
 }
 
-func speicherFehler(w http.ResponseWriter, err error) {
+func speicherFehler(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, store.ErrNichtGefunden) {
-		fehler(w, http.StatusNotFound, "Eintrag nicht gefunden")
+		fehlerAus(w, r, http.StatusNotFound, err)
 		return
 	}
 	if errors.Is(err, vault.ErrGesperrt) {
-		fehler(w, http.StatusUnauthorized, "Bitte anmelden")
+		fehlerT(w, r, http.StatusUnauthorized, "server.anmelden")
 		return
 	}
 	log.Printf("Datenbank: %v", err)
-	fehler(w, http.StatusInternalServerError, "Speichern oder Lesen in der Datenbank fehlgeschlagen — Details im Server-Log")
+	fehlerT(w, r, http.StatusInternalServerError, "server.datenbank")
 }
 
 // --- Bestand ---
@@ -42,17 +43,17 @@ func speicherFehler(w http.ResponseWriter, err error) {
 func (s *Server) daten(w http.ResponseWriter, r *http.Request) {
 	ordner, err := s.st.Ordner()
 	if err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	hosts, err := s.st.Hosts()
 	if err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	zugaenge, err := s.st.Zugaenge()
 	if err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	nutzung, _ := s.st.ZugangNutzung()
@@ -66,12 +67,12 @@ func (s *Server) daten(w http.ResponseWriter, r *http.Request) {
 	}
 	snippets, err := s.st.Snippets()
 	if err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	bekannt, err := s.st.BekannteHosts()
 	if err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	jsonAntwort(w, http.StatusOK, map[string]any{
@@ -82,17 +83,17 @@ func (s *Server) daten(w http.ResponseWriter, r *http.Request) {
 func (s *Server) ordnerSpeichern(w http.ResponseWriter, r *http.Request) {
 	var o store.Ordner
 	if err := lesen(r, &o); err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	o.ID = pfadID(r)
 	o.Name = strings.TrimSpace(o.Name)
 	if o.Name == "" || len(o.Name) > 60 {
-		fehler(w, http.StatusBadRequest, "Ordnername: 1 bis 60 Zeichen")
+		fehlerT(w, r, http.StatusBadRequest, "server.ordner.name")
 		return
 	}
 	if err := s.st.OrdnerSpeichern(&o); err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	jsonAntwort(w, http.StatusOK, o)
@@ -100,7 +101,7 @@ func (s *Server) ordnerSpeichern(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) ordnerLoeschen(w http.ResponseWriter, r *http.Request) {
 	if err := s.st.OrdnerLoeschen(pfadID(r)); err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
@@ -117,33 +118,29 @@ func geraetBekannt(id string) bool { return slices.Contains(geraeteIDs, id) }
 func (s *Server) hostSpeichern(w http.ResponseWriter, r *http.Request) {
 	var h store.Host
 	if err := lesen(r, &h); err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	h.ID = pfadID(r)
 	h.Name, h.Adresse, h.Benutzer = strings.TrimSpace(h.Name), strings.TrimSpace(h.Adresse), strings.TrimSpace(h.Benutzer)
 	h.Geraet = strings.TrimSpace(h.Geraet)
 	if !geraetBekannt(h.Geraet) {
-		fehler(w, http.StatusBadRequest, "Unbekannter Gerätetyp «"+kurz(h.Geraet, 40)+"»")
+		fehlerT(w, r, http.StatusBadRequest, "server.host.geraet", kurz(h.Geraet, 40))
 		return
 	}
 	if h.Adresse == "" || strings.ContainsAny(h.Adresse, " /@") {
-		fehler(w, http.StatusBadRequest, "Adresse fehlt oder enthält Leerzeichen, / oder @")
+		fehlerT(w, r, http.StatusBadRequest, "server.host.adresse")
 		return
 	}
 	if h.Name == "" {
 		h.Name = h.Adresse
 	}
 	if h.Port < 0 || h.Port > 65535 {
-		fehler(w, http.StatusBadRequest, "Port muss zwischen 1 und 65535 liegen")
-		return
-	}
-	if h.ID != 0 && h.JumpID == h.ID {
-		fehler(w, http.StatusBadRequest, "Ein Host kann nicht sein eigener Jump-Host sein")
+		fehlerT(w, r, http.StatusBadRequest, "server.host.port")
 		return
 	}
 	if err := s.st.HostSpeichern(&h); err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	jsonAntwort(w, http.StatusOK, h)
@@ -151,7 +148,7 @@ func (s *Server) hostSpeichern(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) hostLoeschen(w http.ResponseWriter, r *http.Request) {
 	if err := s.st.HostLoeschen(pfadID(r)); err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
@@ -171,14 +168,14 @@ type zugangEingabe struct {
 func (s *Server) zugangSpeichern(w http.ResponseWriter, r *http.Request) {
 	var e zugangEingabe
 	if err := lesen(r, &e); err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	z := store.Zugang{}
 	if id := pfadID(r); id != 0 {
 		var err error
 		if z, err = s.st.Zugang(id); err != nil {
-			speicherFehler(w, err)
+			speicherFehler(w, r, err)
 			return
 		}
 	}
@@ -187,7 +184,7 @@ func (s *Server) zugangSpeichern(w http.ResponseWriter, r *http.Request) {
 		z.Name = z.Benutzer
 	}
 	if z.Name == "" {
-		fehler(w, http.StatusBadRequest, "Name oder Benutzer angeben")
+		fehlerT(w, r, http.StatusBadRequest, "server.zugang.name")
 		return
 	}
 	var err error
@@ -196,7 +193,7 @@ func (s *Server) zugangSpeichern(w http.ResponseWriter, r *http.Request) {
 	}
 	if e.Passwort != "" {
 		if z.PasswortEnc, err = s.tr.Verschluesseln([]byte(e.Passwort)); err != nil {
-			speicherFehler(w, err)
+			speicherFehler(w, r, err)
 			return
 		}
 	}
@@ -206,17 +203,17 @@ func (s *Server) zugangSpeichern(w http.ResponseWriter, r *http.Request) {
 	if k := strings.TrimSpace(e.Schluessel); k != "" {
 		typ, pub, fp, err := sshx.SchluesselInfo([]byte(k+"\n"), e.Passphrase, z.Name)
 		if err != nil {
-			fehler(w, http.StatusBadRequest, err.Error())
+			fehlerAus(w, r, http.StatusBadRequest, err)
 			return
 		}
 		if z.SchluesselEnc, err = s.tr.Verschluesseln([]byte(k + "\n")); err != nil {
-			speicherFehler(w, err)
+			speicherFehler(w, r, err)
 			return
 		}
 		z.PassphraseEnc = nil
 		if e.Passphrase != "" {
 			if z.PassphraseEnc, err = s.tr.Verschluesseln([]byte(e.Passphrase)); err != nil {
-				speicherFehler(w, err)
+				speicherFehler(w, r, err)
 				return
 			}
 		}
@@ -227,7 +224,7 @@ func (s *Server) zugangSpeichern(w http.ResponseWriter, r *http.Request) {
 		z.Art = "schluessel"
 	}
 	if err := s.st.ZugangSpeichern(&z); err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	jsonAntwort(w, http.StatusOK, z)
@@ -236,29 +233,29 @@ func (s *Server) zugangSpeichern(w http.ResponseWriter, r *http.Request) {
 func (s *Server) zugangErzeugen(w http.ResponseWriter, r *http.Request) {
 	var e zugangEingabe
 	if err := lesen(r, &e); err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	z := store.Zugang{Name: strings.TrimSpace(e.Name), Benutzer: strings.TrimSpace(e.Benutzer), Art: "schluessel"}
 	if z.Name == "" {
-		fehler(w, http.StatusBadRequest, "Name angeben")
+		fehlerT(w, r, http.StatusBadRequest, "server.zugang.name.fehlt")
 		return
 	}
 	priv, err := sshx.NeuerSchluessel(z.Name)
 	if err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	if z.SchluesselTyp, z.Oeffentlich, z.Fingerprint, err = sshx.SchluesselInfo(priv, "", z.Name); err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	if z.SchluesselEnc, err = s.tr.Verschluesseln(priv); err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	if err := s.st.ZugangSpeichern(&z); err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	jsonAntwort(w, http.StatusOK, z)
@@ -268,12 +265,12 @@ func (s *Server) zugangErzeugen(w http.ResponseWriter, r *http.Request) {
 func (s *Server) zugangPrivat(w http.ResponseWriter, r *http.Request) {
 	z, err := s.st.Zugang(pfadID(r))
 	if err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	klar, err := s.tr.Entschluesseln(z.SchluesselEnc)
 	if err != nil || len(klar) == 0 {
-		fehler(w, http.StatusNotFound, "Kein privater Schlüssel hinterlegt")
+		fehlerT(w, r, http.StatusNotFound, "server.zugang.kein.privat")
 		return
 	}
 	log.Printf("Privater Schlüssel «%s» exportiert", z.Name)
@@ -297,7 +294,7 @@ func dateiname(s string) string {
 
 func (s *Server) zugangLoeschen(w http.ResponseWriter, r *http.Request) {
 	if err := s.st.ZugangLoeschen(pfadID(r)); err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
@@ -311,49 +308,54 @@ func (s *Server) zugangInstallieren(w http.ResponseWriter, r *http.Request) {
 		Passwort string `json:"passwort"`
 	}
 	if err := lesen(r, &p); err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	z, err := s.st.Zugang(pfadID(r))
 	if err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	if z.Oeffentlich == "" {
-		fehler(w, http.StatusBadRequest, "Dieser Zugang hat keinen Schlüssel")
+		fehlerT(w, r, http.StatusBadRequest, "server.zugang.kein.schluessel")
 		return
 	}
 	befehl, err := sshx.AuthorizedKeysBefehl(z.Oeffentlich)
 	if err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	h, err := s.st.Host(p.HostID)
 	if err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	// Hat der Host keinen Benutzer, gilt der Benutzer des einzutragenden Zugangs.
-	ziel, jump, err := s.zielFuer(h, &sshx.Anmeldung{Benutzer: z.Benutzer, Passwort: p.Passwort})
+	ziel, err := s.zielFuer(h, &sshx.Anmeldung{Benutzer: z.Benutzer, Passwort: p.Passwort})
 	if err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if ziel.Anmeldung.Benutzer == "" {
-		fehler(w, http.StatusBadRequest, "Für diesen Host ist kein Benutzer hinterlegt — im Host oder im Zugang eintragen")
+		fehlerT(w, r, http.StatusBadRequest, "server.installieren.kein.benutzer")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
-	client, schliessen, err := sshx.Verbinden(ctx, ziel, jump, s.nurBekannte)
+	client, schliessen, err := sshx.Verbinden(ctx, ziel, s.nurBekannte)
 	if err != nil {
-		fehler(w, http.StatusBadGateway, err.Error())
+		fehlerAus(w, r, http.StatusBadGateway, err)
 		return
 	}
 	defer schliessen()
 	out, err := sshx.Ausfuehren(client, befehl)
 	if err != nil || !strings.Contains(out, "SSHAPP-OK") {
-		fehler(w, http.StatusBadGateway, "Eintragen fehlgeschlagen: "+strings.TrimSpace(out))
+		log.Printf("Schlüssel «%s» auf %s eintragen: %v %q", z.Name, h.Name, err, kurz(out, 200))
+		if out = kurz(strings.TrimSpace(out), 300); out == "" {
+			fehlerT(w, r, http.StatusBadGateway, "server.installieren.fehlgeschlagen")
+		} else {
+			fehlerT(w, r, http.StatusBadGateway, "server.installieren.fehlgeschlagen.mit", out)
+		}
 		return
 	}
 	log.Printf("Schlüssel «%s» auf %s eingetragen", z.Name, h.Name)
@@ -363,17 +365,17 @@ func (s *Server) zugangInstallieren(w http.ResponseWriter, r *http.Request) {
 func (s *Server) snippetSpeichern(w http.ResponseWriter, r *http.Request) {
 	var sn store.Snippet
 	if err := lesen(r, &sn); err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	sn.ID = pfadID(r)
 	sn.Name = strings.TrimSpace(sn.Name)
 	if sn.Name == "" || strings.TrimSpace(sn.Befehl) == "" {
-		fehler(w, http.StatusBadRequest, "Name und Befehl angeben")
+		fehlerT(w, r, http.StatusBadRequest, "server.snippet.leer")
 		return
 	}
 	if err := s.st.SnippetSpeichern(&sn); err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	jsonAntwort(w, http.StatusOK, sn)
@@ -381,7 +383,7 @@ func (s *Server) snippetSpeichern(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) snippetLoeschen(w http.ResponseWriter, r *http.Request) {
 	if err := s.st.SnippetLoeschen(pfadID(r)); err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
@@ -389,7 +391,7 @@ func (s *Server) snippetLoeschen(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) bekanntLoeschen(w http.ResponseWriter, r *http.Request) {
 	if err := s.st.BekanntLoeschen(r.PathValue("ziel")); err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
@@ -410,17 +412,17 @@ const dateiFormat = "ssh-app-backup"
 func (s *Server) sicherungLaden(w http.ResponseWriter, r *http.Request) {
 	sg, err := s.st.Exportieren(s.tr.KopfJSON(), "ssh-app "+s.opt.Version)
 	if err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	klar, _ := json.Marshal(sg)
 	geheim, err := s.tr.BackupVersiegeln(klar)
 	if err != nil {
-		speicherFehler(w, err)
+		speicherFehler(w, r, err)
 		return
 	}
 	d := sicherungsDatei{Format: dateiFormat, Version: 1, Erstellt: sg.Erstellt,
-		Hinweis: "Verschlüsselt. Einspielen nur mit dem Sicherheitsschlüssel.", Daten: geheim}
+		Hinweis: texte.T(texte.AusAnfrage(r), "server.sicherung.hinweis"), Daten: geheim}
 	name := "ssh-app-backup-" + time.Now().Format("2006-01-02-1504") + ".json"
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
@@ -432,21 +434,21 @@ func sicherungLesen(r *http.Request) (store.Sicherung, string, error) {
 	var sg store.Sicherung
 	r.Body = http.MaxBytesReader(nil, r.Body, 64<<20)
 	if err := r.ParseMultipartForm(8 << 20); err != nil {
-		return sg, "", errors.New("Datei fehlt oder ist zu gross")
+		return sg, "", texte.Neu("server.sicherung.zu.gross")
 	}
 	schluessel := r.FormValue("schluessel")
 	f, _, err := r.FormFile("datei")
 	if err != nil {
-		return sg, "", errors.New("Datei fehlt")
+		return sg, "", texte.Neu("server.sicherung.datei.fehlt")
 	}
 	defer f.Close()
 	roh, err := io.ReadAll(f)
 	if err != nil {
-		return sg, "", errors.New("Die Datei liess sich nicht lesen")
+		return sg, "", texte.Neu("server.sicherung.unlesbar")
 	}
 	var d sicherungsDatei
 	if err := json.Unmarshal(roh, &d); err != nil || d.Format != dateiFormat {
-		return sg, "", errors.New("Die Datei ist kein Backup dieser App")
+		return sg, "", texte.Neu("server.sicherung.fremd")
 	}
 	klar, err := vault.BackupOeffnen(schluessel, d.Daten)
 	if err != nil {
@@ -454,7 +456,7 @@ func sicherungLesen(r *http.Request) (store.Sicherung, string, error) {
 	}
 	if err := json.NewDecoder(bytes.NewReader(klar)).Decode(&sg); err != nil {
 		log.Printf("Backup-Inhalt lesen: %v", err)
-		return sg, "", errors.New("Der Inhalt des Backups ist beschädigt")
+		return sg, "", texte.Neu("server.sicherung.beschaedigt")
 	}
 	if err := sg.Pruefen(); err != nil {
 		return sg, "", err
@@ -463,9 +465,9 @@ func sicherungLesen(r *http.Request) (store.Sicherung, string, error) {
 	// (andere Version, falscher Schluessel), bleibt der Bestand unberuehrt.
 	if err := vault.KopfPruefen(sg.TresorKopf, schluessel); err != nil {
 		if errors.Is(err, vault.ErrSchluesselFalsch) {
-			return sg, "", errors.New("Der Tresor im Backup passt nicht zum Sicherheitsschlüssel — nichts geändert")
+			return sg, "", texte.Neu("server.sicherung.tresor.falsch")
 		}
-		return sg, "", errors.New("Der Tresor im Backup ist unvollständig oder stammt aus einer neueren Version — nichts geändert")
+		return sg, "", texte.Neu("server.sicherung.tresor.neuer").MitUrsache(err)
 	}
 	return sg, schluessel, nil
 }
@@ -475,7 +477,7 @@ func sicherungLesen(r *http.Request) (store.Sicherung, string, error) {
 func (s *Server) einspielen(w http.ResponseWriter, r *http.Request, nurFrisch bool) {
 	schonEingerichtet := func() bool {
 		if nurFrisch && s.tr.Angelegt() {
-			fehler(w, http.StatusConflict, "Die App ist schon eingerichtet — Backup nach der Anmeldung unter Einstellungen einspielen")
+			fehlerT(w, r, http.StatusConflict, "server.einspielen.eingerichtet")
 			return true
 		}
 		return false
@@ -485,7 +487,7 @@ func (s *Server) einspielen(w http.ResponseWriter, r *http.Request, nurFrisch bo
 	}
 	v, grund := s.versuchBeginnen(r)
 	if v == nil {
-		fehler(w, http.StatusTooManyRequests, grund)
+		fehlerAus(w, r, http.StatusTooManyRequests, grund)
 		return
 	}
 	defer v.abbrechen()
@@ -495,7 +497,7 @@ func (s *Server) einspielen(w http.ResponseWriter, r *http.Request, nurFrisch bo
 		log.Printf("Backup mit falschem Sicherheitsschlüssel von %s", s.clientIP(r))
 	}
 	if err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	v.richtig()
@@ -512,12 +514,12 @@ func (s *Server) einspielen(w http.ResponseWriter, r *http.Request, nurFrisch bo
 	}
 	if err := s.st.Einspielen(sg, MetaTresor); err != nil {
 		log.Printf("Einspielen: %v", err)
-		fehler(w, http.StatusInternalServerError, "Einspielen fehlgeschlagen — nichts geändert")
+		fehlerT(w, r, http.StatusInternalServerError, "server.einspielen.fehlgeschlagen")
 		return
 	}
 	if err := s.tr.Uebernehmen(sg.TresorKopf, schluessel); err != nil {
-		log.Printf("Einspielen: Tresor übernehmen: %v", err)
-		fehler(w, http.StatusInternalServerError, "Tresor übernehmen: "+err.Error())
+		log.Printf("Einspielen: Tresor übernehmen: %v (%v)", err, errors.Unwrap(err))
+		fehlerT(w, r, http.StatusInternalServerError, "server.einspielen.tresor", texte.Uebersetzen(texte.AusAnfrage(r), err))
 		return
 	}
 	s.alleAbmelden()

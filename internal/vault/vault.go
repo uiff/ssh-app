@@ -24,27 +24,29 @@ import (
 	"crypto/subtle"
 	"encoding/base32"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"unicode"
 
 	"golang.org/x/crypto/argon2"
+
+	"github.com/uiff/ssh-app/internal/texte"
 )
 
 // MinPasswortLaenge ist die Mindestlaenge des Anmeldepassworts.
 const MinPasswortLaenge = 10
 
+// Fehler fuer den Anwender (texte.Meldung, Vergleich mit errors.Is).
 var (
-	ErrGesperrt         = errors.New("Tresor ist gesperrt")
-	ErrFalsch           = errors.New("Benutzername oder Passwort ist falsch")
-	ErrSchluesselFalsch = errors.New("Der Sicherheitsschlüssel passt nicht")
-	ErrSchonAngelegt    = errors.New("Die App ist schon eingerichtet")
-	ErrNichtAngelegt    = errors.New("Die App ist noch nicht eingerichtet")
-	ErrZuKurz           = fmt.Errorf("Das Passwort braucht mindestens %d Zeichen", MinPasswortLaenge)
-	ErrBenutzer         = errors.New("Benutzername: 1 bis 40 Zeichen, keine Leerzeichen")
-	ErrAltFalsch        = errors.New("Das bisherige Passwort ist falsch")
+	ErrGesperrt         error = texte.Neu("vault.gesperrt")
+	ErrFalsch           error = texte.Neu("vault.anmeldung.falsch")
+	ErrSchluesselFalsch error = texte.Neu("vault.schluessel.falsch")
+	ErrSchonAngelegt    error = texte.Neu("vault.schon.eingerichtet")
+	ErrNichtAngelegt    error = texte.Neu("vault.nicht.eingerichtet")
+	ErrZuKurz           error = texte.Neu("vault.passwort.kurz", MinPasswortLaenge)
+	ErrBenutzer         error = texte.Neu("vault.benutzer.ungueltig")
+	ErrAltFalsch        error = texte.Neu("vault.passwort.alt.falsch")
+	ErrSchluesselFormat error = texte.Neu("vault.schluessel.format")
 )
 
 // Kopf ist der dauerhaft gespeicherte Teil. Er enthaelt keine Klartext-Geheimnisse.
@@ -129,10 +131,10 @@ func Neu(kopfJSON []byte) (*Tresor, error) {
 func KopfLesen(kopfJSON []byte) (Kopf, error) {
 	var k Kopf
 	if err := json.Unmarshal(kopfJSON, &k); err != nil {
-		return k, fmt.Errorf("Tresor-Kopf lesen: %w", err)
+		return k, texte.Neu("vault.kopf.unlesbar").MitUrsache(err)
 	}
 	if k.Version != 1 || len(k.Salz) < 16 || len(k.DEKPasswort) == 0 || len(k.DEKNotfall) == 0 || k.Benutzer == "" {
-		return k, errors.New("Tresor-Kopf ist unvollständig")
+		return k, texte.Neu("vault.kopf.unvollstaendig")
 	}
 	return k, nil
 }
@@ -459,7 +461,7 @@ func SchluesselLesen(s string) ([]byte, error) {
 	}, s))
 	roh, err := b32.DecodeString(s)
 	if err != nil || len(roh) != 32 {
-		return nil, errors.New("Das ist kein gültiger Sicherheitsschlüssel")
+		return nil, ErrSchluesselFormat
 	}
 	return roh, nil
 }
@@ -490,7 +492,7 @@ func oeffnen(schluessel, geheim []byte) ([]byte, error) {
 func oeffnenMit(gcm cipher.AEAD, geheim []byte) ([]byte, error) {
 	n := gcm.NonceSize()
 	if len(geheim) < n {
-		return nil, errors.New("Geheimnis zu kurz")
+		return nil, texte.Neu("vault.geheimnis.kaputt")
 	}
 	return gcm.Open(nil, geheim[:n], geheim[n:], nil)
 }

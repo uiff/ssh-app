@@ -97,18 +97,28 @@ button.chip { position: relative; }
 .einstieg-bild h1 { margin: 0; font-size: 44px; line-height: 1.1; letter-spacing: -0.02em; max-width: 520px; }
 .einstieg-bild p { margin: 0; font-size: 18px; line-height: 1.6; color: var(--text2); max-width: 500px; }
 .einstieg-bild .term-deko { font-family: var(--mono); font-size: 14px; line-height: 1.8; color: #5A6270; white-space: pre; }
-.einstieg-form { width: 520px; max-width: 100%; padding: 48px 64px; display: flex; flex-direction: column; justify-content: center; gap: 18px; }
+.einstieg-form { width: 520px; max-width: 100%; padding: 72px 64px 48px; display: flex; flex-direction: column; justify-content: center; gap: 18px; }
 .einstieg-form h2 { margin: 0; font-size: 26px; }
 .einstieg-form p.unter { margin: -8px 0 4px; color: var(--leise); line-height: 1.5; }
 .einstieg .fuss { font-size: 13px; color: var(--leise); }
 .logo-link { display: inline-flex; align-items: center; min-height: 44px; }
 .logo-link img { display: block; height: 36px; width: auto; }
+.einstieg-bild .logo-link { align-self: flex-start; } /* nur das Logo ist Link, nicht die ganze Zeile (oben rechts liegt die Sprachwahl) */
 .schluessel-box { font-family: var(--mono); font-size: 17px; line-height: 1.7; letter-spacing: .02em; padding: 16px; border-radius: var(--radius); background: var(--term); border: 1px solid var(--akzent); word-break: break-all; user-select: all; }
 .meldung { padding: 12px 14px; border-radius: 8px; font-size: 14px; line-height: 1.5; display: flex; gap: 10px; align-items: flex-start; }
 .meldung.fehler { background: var(--fehler-grund); color: var(--fehler-text); border: 1px solid var(--fehler-rand); }
 .meldung.warn { background: var(--warn-grund); color: var(--warn-text); }
 .meldung.gut { background: var(--gut-grund); color: #B9E4DA; }
 .textlink { color: var(--akzent); text-decoration: underline; min-height: 44px; display: inline-flex; align-items: center; }
+/* Sprachwahl «Deutsch / English»: Einrichten und Anmelden oben rechts. Die Knoepfe sind 36 px hoch,
+   ihre Trefferflaeche reicht per ::after auf 44 px. */
+.sprachwahl { display: inline-flex; align-items: center; gap: 2px; padding: 3px; border-radius: 10px; border: 1px solid var(--linie); background: var(--flaeche); }
+.sprachwahl button { position: relative; height: 36px; min-width: 44px; padding: 0 12px; border-radius: 7px; font-size: 14px; font-weight: 500; color: var(--leise); }
+.sprachwahl button::after { content: ''; position: absolute; inset: -4px 0; }
+.sprachwahl button:hover { color: var(--text); }
+.sprachwahl button[aria-pressed=true] { background: var(--wahl); color: var(--text); font-weight: 600; }
+.sprachwahl.oben { position: absolute; z-index: 2; top: calc(12px + env(safe-area-inset-top, 0px)); right: calc(12px + env(safe-area-inset-right, 0px)); }
+.tastatur-offen .sprachwahl.oben { display: none; } /* Telefon mit offener Tastatur: der Platz gehoert dem Formular */
 
 /* ---------- Arbeitsplatz ---------- */
 .app { position: fixed; left: 0; right: 0; top: 0; height: var(--app-hoehe, 100%); display: flex; flex-direction: column; }
@@ -127,13 +137,18 @@ button.chip { position: relative; }
 .seite.rechts { border-right: 0; border-left: 1px solid var(--linie); width: 340px; }
 .seite.dateien { width: 320px; }
 /* Leisten (V8): genau --leiste hoch. Die Trennlinie ist ein Schatten innen, so liegen alle Unterkanten
-   auf derselben Pixelzeile und die volle Hoehe bleibt fuer 44-px-Trefferflaechen nutzbar. */
-.seite-kopf { height: var(--leiste); flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 14px; box-shadow: inset 0 -1px 0 var(--linie); font-weight: 600; }
+   auf derselben Pixelzeile und die volle Hoehe bleibt fuer 44-px-Trefferflaechen nutzbar.
+   Seitenleisten-Koepfe: Die 44-px-Knoepfe fuellen die ganze Hoehe, ihr Hover-Hintergrund (am Telefon
+   bleibt er nach dem Antippen stehen) laege ueber einem Innenschatten — die Linie liegt deshalb als
+   ::after ueber den Knoepfen. */
+.seite-kopf { position: relative; height: var(--leiste); flex: none; box-sizing: border-box; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 14px; font-weight: 600; }
+.seite-kopf::after { content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 1px; background: var(--linie); pointer-events: none; z-index: 1; }
 .seite-kopf .titel { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .seite-inhalt { flex: 1; overflow-y: auto; min-height: 0; -webkit-overflow-scrolling: touch; }
 .reiter { display: flex; flex: none; height: var(--leiste); box-sizing: border-box; box-shadow: inset 0 -1px 0 var(--linie); }
-.reiter button { flex: 1; height: 100%; color: var(--leise); font-weight: 500; border-bottom: 2px solid transparent; }
-.reiter button[aria-selected=true] { color: var(--text); font-weight: 600; border-bottom-color: var(--akzent); }
+.reiter button { flex: 1; height: 100%; color: var(--leise); font-weight: 500; box-shadow: inset 0 -1px 0 var(--linie); }
+/* Gewaehlter Reiter: Akzentstrich genau auf der Leistenlinie (1 px, nicht darueber hinaus). */
+.reiter button[aria-selected=true] { color: var(--text); font-weight: 600; box-shadow: inset 0 -1px 0 var(--akzent); }
 
 /* Host-Liste */
 .filter { padding: 10px 12px; }
@@ -157,7 +172,7 @@ button.chip { position: relative; }
 .tab.aktiv { background: var(--term); color: var(--text); border: 1px solid var(--linie); border-bottom: 0; --hsym-rand: var(--term); }
 .tab-knopf { display: flex; align-items: center; gap: 9px; height: 100%; max-width: 240px; min-width: 0; }
 .tab-knopf .t { overflow: hidden; text-overflow: ellipsis; }
-.tabs .tab-neu { width: 36px; height: 36px; }
+.tabs .tab-neu { width: 36px; height: 35px; margin-bottom: 1px; } /* Hover-Flaeche endet ueber der Leistenlinie */
 .tab .zu { width: 28px; height: 28px; border-radius: 6px; display: inline-flex; align-items: center; justify-content: center; color: var(--leise); }
 .tab .zu:hover { background: var(--flaeche2); color: var(--text); }
 .terms { flex: 1; position: relative; min-height: 0; }

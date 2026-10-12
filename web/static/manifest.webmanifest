@@ -1,7 +1,7 @@
 {
   "name": "SSH-App",
   "short_name": "SSH-App",
-  "description": "Web-SSH-Client mit Tresor, Dateileiste und Befehlshilfe",
+  "description": "Web SSH client with vault, files and command help",
   "start_url": "./",
   "display": "standalone",
   "background_color": "#0E1013",

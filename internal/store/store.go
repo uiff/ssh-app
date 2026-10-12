@@ -11,9 +11,12 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/uiff/ssh-app/internal/texte"
 )
 
-var ErrNichtGefunden = errors.New("nicht gefunden")
+// ErrNichtGefunden: der Eintrag existiert nicht (Vergleich mit errors.Is).
+var ErrNichtGefunden error = texte.Neu("store.nicht.gefunden")
 
 type Ordner struct {
 	ID   int64  `json:"id"`
@@ -29,7 +32,6 @@ type Host struct {
 	Benutzer   string   `json:"benutzer"` // ueberschreibt den Benutzer des Zugangs, wenn gesetzt
 	OrdnerID   int64    `json:"ordnerId"`
 	ZugangID   int64    `json:"zugangId"`
-	JumpID     int64    `json:"jumpId"`
 	Farbe      string   `json:"farbe"`
 	Tags       []string `json:"tags"`
 	PfadFolgen bool     `json:"pfadFolgen"`
@@ -81,13 +83,14 @@ CREATE TABLE IF NOT EXISTS zugang (
 CREATE TABLE IF NOT EXISTS host (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, adresse TEXT NOT NULL, port INTEGER NOT NULL DEFAULT 22,
   benutzer TEXT NOT NULL DEFAULT '', ordner_id INTEGER NOT NULL DEFAULT 0, zugang_id INTEGER NOT NULL DEFAULT 0,
-  jump_id INTEGER NOT NULL DEFAULT 0, farbe TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '',
+  farbe TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '',
   pfad_folgen INTEGER NOT NULL DEFAULT 1, notiz TEXT NOT NULL DEFAULT '', geraet TEXT NOT NULL DEFAULT '');
 CREATE TABLE IF NOT EXISTS bekannt (ziel TEXT PRIMARY KEY, typ TEXT NOT NULL, schluessel TEXT NOT NULL, fingerprint TEXT NOT NULL, seit INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS snippet (id INTEGER PRIMARY KEY, name TEXT NOT NULL, befehl TEXT NOT NULL, beschreibung TEXT NOT NULL DEFAULT '');
 `
 
-// Spalten, die spaeter dazukamen: bei aelteren Datenbanken nachruesten.
+// Spalten, die spaeter dazukamen: bei aelteren Datenbanken nachruesten. Aeltere
+// Datenbanken haben in host noch die Spalte jump_id; sie bleibt unbenutzt stehen.
 var nachruesten = []struct{ tabelle, spalte, def string }{
 	{"host", "geraet", `TEXT NOT NULL DEFAULT ''`},
 }
@@ -223,13 +226,13 @@ func (s *Store) OrdnerLoeschen(id int64) error {
 
 // --- Hosts ---
 
-const hostSpalten = `id,name,adresse,port,benutzer,ordner_id,zugang_id,jump_id,farbe,tags,pfad_folgen,notiz,geraet`
+const hostSpalten = `id,name,adresse,port,benutzer,ordner_id,zugang_id,farbe,tags,pfad_folgen,notiz,geraet`
 
 func scanHost(sc interface{ Scan(...any) error }) (Host, error) {
 	var h Host
 	var tags string
 	var folgen int
-	err := sc.Scan(&h.ID, &h.Name, &h.Adresse, &h.Port, &h.Benutzer, &h.OrdnerID, &h.ZugangID, &h.JumpID, &h.Farbe, &tags, &folgen, &h.Notiz, &h.Geraet)
+	err := sc.Scan(&h.ID, &h.Name, &h.Adresse, &h.Port, &h.Benutzer, &h.OrdnerID, &h.ZugangID, &h.Farbe, &tags, &folgen, &h.Notiz, &h.Geraet)
 	h.Tags = splitTags(tags)
 	h.PfadFolgen = folgen != 0
 	return h, err
@@ -264,40 +267,66 @@ func (s *Store) HostSpeichern(h *Host) error {
 	if h.Port == 0 {
 		h.Port = 22
 	}
-	args := []any{h.Name, h.Adresse, h.Port, h.Benutzer, h.OrdnerID, h.ZugangID, h.JumpID, h.Farbe, joinTags(h.Tags), b2i(h.PfadFolgen), h.Notiz, h.Geraet}
+	args := []any{h.Name, h.Adresse, h.Port, h.Benutzer, h.OrdnerID, h.ZugangID, h.Farbe, joinTags(h.Tags), b2i(h.PfadFolgen), h.Notiz, h.Geraet}
 	if h.ID == 0 {
-		r, err := s.db.Exec(`INSERT INTO host(name,adresse,port,benutzer,ordner_id,zugang_id,jump_id,farbe,tags,pfad_folgen,notiz,geraet) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`, args...)
+		r, err := s.db.Exec(`INSERT INTO host(name,adresse,port,benutzer,ordner_id,zugang_id,farbe,tags,pfad_folgen,notiz,geraet) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, args...)
 		if err != nil {
 			return err
 		}
 		h.ID, _ = r.LastInsertId()
 		return nil
 	}
-	return mussTreffen(s.db.Exec(`UPDATE host SET name=?,adresse=?,port=?,benutzer=?,ordner_id=?,zugang_id=?,jump_id=?,farbe=?,tags=?,pfad_folgen=?,notiz=?,geraet=? WHERE id=?`, append(args, h.ID)...))
+	return mussTreffen(s.db.Exec(`UPDATE host SET name=?,adresse=?,port=?,benutzer=?,ordner_id=?,zugang_id=?,farbe=?,tags=?,pfad_folgen=?,notiz=?,geraet=? WHERE id=?`, append(args, h.ID)...))
 }
 
-// HostZugangSetzen legt einen Zugang an und haengt ihn an den Host (eine Transaktion).
-func (s *Store) HostZugangSetzen(hostID int64, z *Zugang) error {
+// HostZugangSetzen speichert beim Verbinden erfragte Zugangsdaten am Host (eine
+// Transaktion). Hat der Host schon einen eigenen Passwort-Zugang (nur er benutzt ihn),
+// bekommt dieser Benutzer und Passwort: wiederholtes Speichern legt keinen Doppelgaenger
+// an. Sonst entsteht ein neuer Zugang, der an den Host gehaengt wird. Ein Benutzer im
+// bestehenden Zugang bleibt; z.Benutzer gilt dort nur, wenn er leer war. aktualisiert
+// meldet, ob ein vorhandener Zugang ergaenzt wurde; z traegt danach dessen Stand.
+func (s *Store) HostZugangSetzen(hostID int64, z *Zugang) (aktualisiert bool, err error) {
 	tx, err := s.db.Begin()
 	if err != nil {
-		return err
+		return false, err
 	}
 	defer tx.Rollback()
+	var eigen int64
+	err = tx.QueryRow(`SELECT z.id FROM host h JOIN zugang z ON z.id=h.zugang_id
+WHERE h.id=? AND z.art='passwort' AND (SELECT COUNT(*) FROM host WHERE zugang_id=z.id)=1`, hostID).Scan(&eigen)
+	switch {
+	case err == nil:
+		if err := mussTreffen(tx.Exec(`UPDATE zugang SET benutzer=CASE WHEN benutzer='' THEN ? ELSE benutzer END, passwort_enc=? WHERE id=?`,
+			z.Benutzer, z.PasswortEnc, eigen)); err != nil {
+			return false, err
+		}
+		neu, err := scanZugang(tx.QueryRow(`SELECT `+zugangSpalten+` FROM zugang WHERE id=?`, eigen))
+		if err != nil {
+			return false, err
+		}
+		if err := tx.Commit(); err != nil {
+			return false, err
+		}
+		*z = neu
+		return true, nil
+	case !errors.Is(err, sql.ErrNoRows):
+		return false, err
+	}
 	r, err := tx.Exec(`INSERT INTO zugang(name,benutzer,art,oeffentlich,fingerprint,schluessel_typ,passwort_enc,schluessel_enc,passphrase_enc) VALUES(?,?,?,?,?,?,?,?,?)`,
 		z.Name, z.Benutzer, z.Art, z.Oeffentlich, z.Fingerprint, z.SchluesselTyp, z.PasswortEnc, z.SchluesselEnc, z.PassphraseEnc)
 	if err != nil {
-		return err
+		return false, err
 	}
 	id, _ := r.LastInsertId()
 	if err := mussTreffen(tx.Exec(`UPDATE host SET zugang_id=? WHERE id=?`, id, hostID)); err != nil {
-		return err
+		return false, err
 	}
 	if err := tx.Commit(); err != nil {
-		return err
+		return false, err
 	}
 	z.ID = id
 	z.HatPasswort, z.HatPassphrase = len(z.PasswortEnc) > 0, len(z.PassphraseEnc) > 0
-	return nil
+	return false, nil
 }
 
 // HostBenutzerSetzen traegt den Benutzer ein, wenn der Host noch keinen hat.
@@ -307,18 +336,7 @@ func (s *Store) HostBenutzerSetzen(hostID int64, benutzer string) error {
 }
 
 func (s *Store) HostLoeschen(id int64) error {
-	tx, err := s.db.Begin()
-	if err != nil {
-		return err
-	}
-	defer tx.Rollback()
-	if _, err := tx.Exec(`UPDATE host SET jump_id=0 WHERE jump_id=?`, id); err != nil {
-		return err
-	}
-	if err := mussTreffen(tx.Exec(`DELETE FROM host WHERE id=?`, id)); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return mussTreffen(s.db.Exec(`DELETE FROM host WHERE id=?`, id))
 }
 
 // --- Zugaenge ---
@@ -359,6 +377,7 @@ func (s *Store) Zugang(id int64) (Zugang, error) {
 }
 
 func (s *Store) ZugangSpeichern(z *Zugang) error {
+	z.HatPasswort, z.HatPassphrase = len(z.PasswortEnc) > 0, len(z.PassphraseEnc) > 0
 	args := []any{z.Name, z.Benutzer, z.Art, z.Oeffentlich, z.Fingerprint, z.SchluesselTyp, z.PasswortEnc, z.SchluesselEnc, z.PassphraseEnc}
 	if z.ID == 0 {
 		r, err := s.db.Exec(`INSERT INTO zugang(name,benutzer,art,oeffentlich,fingerprint,schluessel_typ,passwort_enc,schluessel_enc,passphrase_enc) VALUES(?,?,?,?,?,?,?,?,?)`, args...)

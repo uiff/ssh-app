@@ -1,6 +1,7 @@
 'use strict';
 // Geraetetypen fuer Hosts: Strich-Symbole (24x24, wie icons in basis.js), keine Emoji.
-// id ist der gespeicherte Wert (ASCII), Texte stehen je Sprache daneben; kurz (optional) fuer enge Kacheln.
+// id ist der gespeicherte Wert (ASCII), Texte stehen je Sprache daneben (de/en); kurz (optional,
+// in beiden Sprachen gleich) fuer enge Kacheln. Anzeige immer ueber geraetName()/geraetKurz().
 
 const GERAETE = [
   { id: '', de: 'Allgemein', en: 'General', gruppe: 'sonst', d: 'M4 6h16v12H4zM8 10h3M8 14h6' },
@@ -36,6 +37,20 @@ const GERAETE_GRUPPEN = [
 
 function geraetFuer(id) {
   return GERAETE.find((g) => g.id === (id || '')) || GERAETE[0];
+}
+
+// Name eines Geraetetyps in der Sprache der Oberflaeche (I18N.sprache), Rueckfall Deutsch.
+function geraetName(id) {
+  const g = geraetFuer(id);
+  return g[I18N.sprache] || g.de;
+}
+// Kurzer Name fuer enge Kacheln (sonst der volle Name).
+function geraetKurz(id) {
+  return geraetFuer(id).kurz || geraetName(id);
+}
+// Name einer Gruppe (GERAETE_GRUPPEN) in der Sprache der Oberflaeche.
+function geraetGruppeName(g) {
+  return g[I18N.sprache] || g.de;
 }
 
 // Strich-Symbol aus einem Pfad (24x24), gleiche Darstellung wie icon() in basis.js.

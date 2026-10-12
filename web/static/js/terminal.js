@@ -10,7 +10,20 @@ const TERM_FARBEN = {
   brightRed: '#F08A7E', brightGreen: '#9FE3D3', brightYellow: '#F5C77A', brightBlue: '#9CC4EA',
   brightMagenta: '#DDB6F2', brightCyan: '#8FD6C8', brightWhite: '#FFFFFF',
 };
-function termThema() { return Object.assign({}, TERM_FARBEN, akzentTerm(akzentFuer(akzentGemerkt()))); }
+// cursor=false: Cursor unsichtbar (solange keine Verbindung steht, liegt die Zustandskarte ueber dem
+// Terminal — ein blinkender Cursor darunter wirkt wie eine Eingabemoeglichkeit). Zeichen unter dem
+// Cursor bleiben in der normalen Schriftfarbe lesbar.
+function termThema(cursor) {
+  const thema = Object.assign({}, TERM_FARBEN, akzentTerm(akzentFuer(akzentGemerkt())));
+  if (cursor === false) { thema.cursor = '#00000000'; thema.cursorAccent = TERM_FARBEN.foreground; }
+  return thema;
+}
+
+// Texte von xterm.js fuer Bildschirmleser (Eingabefeld, Ansage bei viel Ausgabe) in der Sprache der Oberflaeche.
+try {
+  Terminal.strings.promptLabel = t('terminal.eingabe');
+  Terminal.strings.tooMuchOutput = t('terminal.zuVielAusgabe');
+} catch (e) { /* aeltere xterm-Version ohne Terminal.strings */ }
 
 const kodierer = new TextEncoder();
 // Close-Codes des Servers (siehe ws.go)
@@ -23,8 +36,9 @@ class TerminalTab {
   constructor({ hostId, sitzungId, titel }) {
     this.hostId = hostId || 0;
     this.sitzungId = sitzungId || '';
-    this.titel = titel || 'Verbinde …';
+    this.titel = titel || t('terminal.verbinde');
     this.zustand = 'verbinde'; // verbinde | bereit | getrennt | fehler | beendet | abgeloest
+    this.cursorSichtbar = false; // Cursor erst zeigen, wenn die Verbindung steht
     this.grund = '';
     this.fingerprint = '';
     this.versuche = 0;
@@ -39,7 +53,7 @@ class TerminalTab {
       cursorBlink: true,
       scrollback: 5000,
       allowProposedApi: true,
-      theme: termThema(),
+      theme: termThema(false),
       macOptionIsMeta: true,
       rightClickSelectsWord: true,
     });
@@ -66,7 +80,7 @@ class TerminalTab {
         // Ohne Clipboard-API (http ueber die LAN-Adresse) fuegt der Browser selbst ein (paste-Ereignis).
         if (!navigator.clipboard || !navigator.clipboard.readText) return false;
         e.preventDefault();
-        navigator.clipboard.readText().then((t) => this.einfuegen(t)).catch(() => toast('Einfügen nicht erlaubt — mit Strg+V geht es auch', 'fehler'));
+        navigator.clipboard.readText().then((text) => this.einfuegen(text)).catch(() => toast(t('terminal.einfuegenVerboten'), 'fehler'));
         return false;
       }
       return true;
@@ -87,8 +101,10 @@ class TerminalTab {
     // Ein WebSocket kann keinen eigenen Kopf senden: auto=1 statt X-SSH-App-Auto. Das automatische
     // Wiederverbinden verlaengert die Anmeldung so nicht (V3); Klick und «Hierher holen» schon.
     if (automatisch) q += '&auto=1';
+    // Sprache der Oberflaeche: Status- und Fehlermeldungen des Servers kommen darin.
+    q += '&sprache=' + encodeURIComponent(I18N.sprache);
     this.abgemeldetGemeldet = false;
-    this.zustandSetzen('verbinde', this.sitzungId ? 'Verbinde neu …' : 'Verbinde …');
+    this.zustandSetzen('verbinde', t(this.sitzungId ? 'terminal.verbindeNeu' : 'terminal.verbinde'));
     const ws = new WebSocket(proto + '//' + location.host + '/api/ws?' + q);
     ws.binaryType = 'arraybuffer';
     this.ws = ws;
@@ -108,16 +124,17 @@ class TerminalTab {
     this.ws = null;
     if (this.geschlossen || this.zustand === 'beendet' || this.zustand === 'abgeloest') return;
     if (code === ZU_ABGEMELDET || this.abgemeldetGemeldet) {
-      this.zustandSetzen('getrennt', 'Abgemeldet');
+      this.abgemeldetZustand = true;
+      this.zustandSetzen('getrennt', t('terminal.abgemeldet'));
       App.abgemeldet();
       return;
     }
     if (code === ZU_ABGELOEST) { this.abgeloest(); return; }
     if (!this.sitzungId) { // Aufbau gescheitert
-      if (this.zustand !== 'fehler') this.zustandSetzen('fehler', this.grund || 'Verbindung fehlgeschlagen');
+      if (this.zustand !== 'fehler') this.zustandSetzen('fehler', this.grund || t('terminal.fehlgeschlagen'));
       return;
     }
-    this.zustandSetzen('getrennt', 'Verbindung unterbrochen — verbinde neu …');
+    this.zustandSetzen('getrennt', t('terminal.unterbrochen'));
     this.spaeterNeu();
   }
 
@@ -168,7 +185,7 @@ class TerminalTab {
     const ws = this.ws;
     this.ws = null;
     if (ws) { try { ws.close(); } catch (e) { /* schon zu */ } }
-    this.zustandSetzen('abgeloest', 'In einem anderen Fenster geöffnet');
+    this.zustandSetzen('abgeloest', t('terminal.abgeloest'));
   }
 
   nachricht(n) {
@@ -202,7 +219,7 @@ class TerminalTab {
         this.pingTimer = setInterval(() => this.lebenszeichen(PONG_FRIST), PING_ALLE);
         App.tabsZeichnen();
         if (App.aktiv === this && !App.istTelefon() && !dialogStapel.length) this.term.focus();
-        if (n.gespeichert) { App.datenLaden(); toast('Zugangsdaten gespeichert'); }
+        if (n.gespeichert) { App.datenLaden(); toast(t('terminal.gespeichert')); }
         break;
       }
       case 'pong':
@@ -227,7 +244,9 @@ class TerminalTab {
 
   zustandSetzen(z, text) {
     this.zustand = z;
+    if (z !== 'getrennt') this.abgemeldetZustand = false;
     if (text) this.grund = text;
+    this.cursorSetzen(z === 'bereit');
     if (z === 'fehler' || z === 'beendet' || z === 'abgeloest') this.rueckfrageZu();
     ersetzen(this.ueber);
     if (z === 'bereit') {
@@ -235,26 +254,35 @@ class TerminalTab {
     } else {
       const knoepfe = [];
       if (z === 'beendet' || z === 'fehler') {
-        if (this.hostId) knoepfe.push(el('button', { class: 'btn klein primaer', type: 'button', onclick: () => App.neuVerbinden(this) }, icon('neu', 16), 'Neu verbinden'));
-        knoepfe.push(el('button', { class: 'btn klein', type: 'button', onclick: () => App.tabSchliessen(this) }, 'Schliessen'));
+        if (this.hostId) knoepfe.push(el('button', { class: 'btn klein primaer', type: 'button', onclick: () => App.neuVerbinden(this) }, icon('neu', 16), t('terminal.neuVerbinden')));
+        knoepfe.push(el('button', { class: 'btn klein', type: 'button', onclick: () => App.tabSchliessen(this) }, t('terminal.schliessen')));
       } else if (z === 'abgeloest') {
-        knoepfe.push(el('button', { class: 'btn klein primaer', type: 'button', onclick: () => { this.versuche = 0; this.verbinden(); } }, 'Hierher holen'));
-        knoepfe.push(el('button', { class: 'btn klein', type: 'button', title: 'Die Sitzung läuft im anderen Fenster weiter', onclick: () => App.tabEntfernen(this) }, 'Hier schliessen'));
-      } else if (z === 'getrennt' && this.sitzungId && text !== 'Abgemeldet') {
-        knoepfe.push(el('button', { class: 'btn klein', type: 'button', onclick: () => this.sofortNeu(true) }, 'Jetzt verbinden'));
+        knoepfe.push(el('button', { class: 'btn klein primaer', type: 'button', onclick: () => { this.versuche = 0; this.verbinden(); } }, t('terminal.hierherHolen')));
+        knoepfe.push(el('button', { class: 'btn klein', type: 'button', title: t('terminal.hierSchliessenTitel'), onclick: () => App.tabEntfernen(this) }, t('terminal.hierSchliessen')));
+      } else if (z === 'getrennt' && this.sitzungId && !this.abgemeldetZustand) {
+        knoepfe.push(el('button', { class: 'btn klein', type: 'button', onclick: () => this.sofortNeu(true) }, t('terminal.jetztVerbinden')));
       }
       this.ueber.className = 'term-ueber' + (z === 'fehler' ? ' fehler' : '');
       this.ueber.append(
         icon(z === 'fehler' ? 'warnung' : z === 'beendet' ? 'terminal' : z === 'abgeloest' ? 'fenster' : 'neu', 22),
         el('div', { class: 'term-ueber-text' },
           el('span', null, text || this.grund),
-          z === 'abgeloest' ? el('small', null, 'Die Sitzung läuft dort weiter. «Hierher holen» zeigt sie wieder in diesem Fenster.') : null,
+          z === 'abgeloest' ? el('small', null, t('terminal.abgeloestHinweis')) : null,
           knoepfe.length ? el('div', { class: 'reihe' }, knoepfe) : null));
     }
     App.tabsZeichnen && App.tabsZeichnen();
     // Dateileiste: Knoepfe sperren/freigeben, nach dem (Wieder-)Verbinden die Liste laden.
     if (App.dateien) App.dateien.zustandGeaendert(this);
   }
+
+  // Cursor nur zeigen, solange die Verbindung steht (Befund: blinkte unter der Zustandskarte).
+  cursorSetzen(sichtbar) {
+    if (this.cursorSichtbar === sichtbar) return;
+    this.cursorSichtbar = sichtbar;
+    this.term.options.theme = termThema(sichtbar);
+  }
+  // Akzentfarbe geaendert (thema.js): Farben neu, Cursor bleibt so sichtbar wie bisher.
+  farbenNeu() { this.term.options.theme = termThema(!!this.cursorSichtbar); }
 
   // Offene Rueckfrage (Host-Schluessel, Anmeldung) schliessen: Die Antwort ginge ins Leere.
   rueckfrageZu() {
@@ -286,7 +314,7 @@ class TerminalTab {
     this.startMerken(text);
     this.sendenRoh(kodierer.encode(this.geklammert(text)));
     if (!o.nurHier && App.rundfunk && App.aktiv === this) {
-      for (const t of App.tabs) if (t !== this && t.zustand === 'bereit') t.sendenRoh(kodierer.encode(t.geklammert(text)));
+      for (const tt of App.tabs) if (tt !== this && tt.zustand === 'bereit') tt.sendenRoh(kodierer.encode(tt.geklammert(text)));
     }
     if (!o.ohneFokus) this.term.focus();
   }
@@ -330,23 +358,23 @@ class TerminalTab {
     if (s && s.y >= y0 && (s.y < cy || (s.y === cy && s.x <= cx))) return this.textZwischen(buf, s.y, s.x, cy, cx).trim();
     // Ohne gemerkten Anfang: das erste Prompt-Zeichen mit Leerzeichen am Zeilenanfang.
     // «>» nach einem Leerzeichen ist eher eine Umleitung (ls > datei) als ein Prompt.
-    const t = this.textZwischen(buf, y0, 0, cy, cx);
-    for (let i = 0; i < t.length - 1 && i < 200; i++) {
-      const z = t[i];
-      if (!/\s/.test(t[i + 1])) continue;
-      if ('$#%❯»'.includes(z) || (z === '>' && (i === 0 || t[i - 1] !== ' '))) return t.slice(i + 2).trim();
+    const zeile = this.textZwischen(buf, y0, 0, cy, cx);
+    for (let i = 0; i < zeile.length - 1 && i < 200; i++) {
+      const z = zeile[i];
+      if (!/\s/.test(zeile[i + 1])) continue;
+      if ('$#%❯»'.includes(z) || (z === '>' && (i === 0 || zeile[i - 1] !== ' '))) return zeile.slice(i + 2).trim();
     }
     return '';
   }
 
   textZwischen(buf, y1, x1, y2, x2) {
-    let t = '';
+    let text = '';
     for (let y = y1; y <= y2; y++) {
       const zeile = buf.getLine(y);
       if (!zeile) break;
-      t += zeile.translateToString(y === y2, y === y1 ? x1 : 0, y === y2 ? x2 : undefined);
+      text += zeile.translateToString(y === y2, y === y1 ? x1 : 0, y === y2 ? x2 : undefined);
     }
-    return t;
+    return text;
   }
 
   schliessen() {

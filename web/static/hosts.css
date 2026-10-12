@@ -141,6 +141,10 @@
 /* ---------- Zugang-Dialog ---------- */
 .fp-hinweis, .zugang-dialog .fp { overflow-wrap: anywhere; word-break: break-all; }
 
+/* ---------- Backup einspielen: Dateiwahl ---------- */
+.datei-wahl { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
+.datei-name { min-width: 0; color: var(--text2); font-size: 14px; overflow-wrap: anywhere; }
+
 /* ---------- Einstellungen: Akzentfarbe ---------- */
 .akzente { display: flex; flex-wrap: wrap; gap: 8px; }
 .akzent-knopf { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px 0 10px; border: 1px solid var(--linie); border-radius: 22px; color: var(--text2); font-size: 14px; }
@@ -148,7 +152,15 @@
 .akzent-knopf .farbpunkt { width: 20px; height: 20px; }
 .akzent-knopf[aria-pressed=true] { border-color: var(--text2); background: var(--flaeche2); color: var(--text); font-weight: 600; }
 .akzent-knopf[aria-pressed=true] .farbpunkt { box-shadow: 0 0 0 2px var(--flaeche2), 0 0 0 3.5px var(--text); }
-.schrift-feld { max-width: 220px; }
+.schrift-feld { max-width: 260px; }
+
+/* ---------- Einstellungen: Sprache (wie die Akzent-Knoepfe, mit Kuerzel statt Farbpunkt) ---------- */
+.sprachen { display: flex; flex-wrap: wrap; gap: 8px; }
+.sprach-knopf { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 14px 0 8px; border: 1px solid var(--linie); border-radius: 22px; color: var(--text2); font-size: 14px; }
+.sprach-knopf:hover { border-color: var(--linie2); color: var(--text); }
+.sprach-kuerzel { display: inline-flex; align-items: center; justify-content: center; min-width: 28px; height: 22px; padding: 0 5px; border-radius: 11px; background: var(--flaeche2); color: var(--leise); font-size: 11px; font-weight: 600; letter-spacing: .04em; }
+.sprach-knopf[aria-pressed=true] { border-color: var(--text2); background: var(--flaeche2); color: var(--text); font-weight: 600; }
+.sprach-knopf[aria-pressed=true] .sprach-kuerzel { background: var(--akzent); color: var(--akzent-text); }
 
 /* ---------- Telefon ---------- */
 @media (max-width: 899px) {
@@ -156,4 +168,6 @@
   .leiste-suche { padding: 12px 10px 8px 12px; }
   .gw-kacheln { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .erweitert .raster2 { gap: 16px; }
+  /* Backup-Knoepfe untereinander in voller Breite (englische Texte sind nebeneinander zu lang) */
+  .einst-knoepfe .btn { flex: 1 1 100%; }
 }

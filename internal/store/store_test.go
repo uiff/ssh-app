@@ -26,11 +26,11 @@ func TestHostsOrdnerZugaenge(t *testing.T) {
 	if err := s.ZugangSpeichern(&z); err != nil {
 		t.Fatal(err)
 	}
-	jump := Host{Name: "bastion", Adresse: "10.0.0.1"}
-	if err := s.HostSpeichern(&jump); err != nil {
+	anderer := Host{Name: "bastion", Adresse: "10.0.0.1"}
+	if err := s.HostSpeichern(&anderer); err != nil {
 		t.Fatal(err)
 	}
-	h := Host{Name: "pi", Adresse: "192.168.0.42", OrdnerID: o.ID, ZugangID: z.ID, JumpID: jump.ID, Tags: []string{"a", " b ", ""}, PfadFolgen: true}
+	h := Host{Name: "pi", Adresse: "192.168.0.42", OrdnerID: o.ID, ZugangID: z.ID, Tags: []string{"a", " b ", ""}, PfadFolgen: true}
 	if err := s.HostSpeichern(&h); err != nil {
 		t.Fatal(err)
 	}
@@ -57,11 +57,14 @@ func TestHostsOrdnerZugaenge(t *testing.T) {
 	if err := s.OrdnerLoeschen(o.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.HostLoeschen(jump.ID); err != nil {
+	if err := s.HostLoeschen(anderer.ID); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.Host(anderer.ID); !errors.Is(err, ErrNichtGefunden) {
+		t.Fatalf("geloeschter Host: %v", err)
+	}
 	got, _ = s.Host(h.ID)
-	if got.ZugangID != 0 || got.OrdnerID != 0 || got.JumpID != 0 {
+	if got.ZugangID != 0 || got.OrdnerID != 0 {
 		t.Fatalf("Verweise nicht geloest: %+v", got)
 	}
 	if err := s.HostLoeschen(999); !errors.Is(err, ErrNichtGefunden) {

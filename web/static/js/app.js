@@ -13,8 +13,8 @@ App.rundfunk = false;
 App.mod = { ctrl: false, alt: false };
 
 // Anzeige der Tab-Zustaende (die internen Namen sind Bezeichner, keine Texte).
-const ZUSTAND_TEXT = { verbinde: 'Verbindet …', bereit: 'Verbunden', getrennt: 'Getrennt — verbindet neu', fehler: 'Fehler', beendet: 'Beendet', abgeloest: 'In anderem Fenster' };
-App.zustandText = (z) => ZUSTAND_TEXT[z] || z;
+const ZUSTAENDE = ['verbinde', 'bereit', 'getrennt', 'fehler', 'beendet', 'abgeloest'];
+App.zustandText = (z) => (ZUSTAENDE.includes(z) ? t('app.zustand.' + z) : z);
 
 // Geraetesymbol eines Hosts in seiner Farbe, optional mit Zustandspunkt (gruen verbunden,
 // gelb verbindet, rot Fehler/beendet, grau in anderem Fenster).
@@ -29,7 +29,7 @@ App.schriftGroesse = () => lokal('schrift', App.istTelefon() ? 13 : 14);
 App.schriftSetzen = (n) => {
   if (!(n >= 9 && n <= 24)) return;
   lokalSetzen('schrift', n);
-  for (const t of App.tabs) { t.term.options.fontSize = n; t.anpassen(); }
+  for (const tt of App.tabs) { tt.term.options.fontSize = n; tt.anpassen(); }
 };
 
 function logoLink(hoehe) {
@@ -37,7 +37,7 @@ function logoLink(hoehe) {
     el('img', { src: 'img/iotueli.svg', alt: 'IoTUeli', style: { height: hoehe + 'px' } }));
 }
 function erstelltVon() {
-  return el('span', null, 'SSH-App · Erstellt von ', el('a', { href: IOTUELI, target: '_blank', rel: 'noopener' }, 'IoTUeli'));
+  return el('span', null, tTeile('app.erstelltVon', { marke: el('a', { href: IOTUELI, target: '_blank', rel: 'noopener' }, 'IoTUeli') }));
 }
 
 // ---------- Hoehe auf dem Telefon (Bildschirmtastatur) ----------
@@ -59,7 +59,7 @@ App.starten = async function () {
   App.aktiv = null;
   ebenenAlleZu();
   if (App.paletteObj) { App.paletteObj.schliessen(); App.paletteObj = null; }
-  for (const t of App.tabs) t.schliessen();
+  for (const tt of App.tabs) tt.schliessen();
   App.tabs = [];
   App.daten = { ordner: [], hosts: [], zugaenge: [], snippets: [], bekannt: [] };
   App.rundfunk = false;
@@ -68,8 +68,8 @@ App.starten = async function () {
   try { App.status = await api('GET', '/api/status'); }
   catch (e) {
     ersetzen(document.getElementById('app'), el('div', { class: 'einstieg' }, el('div', { class: 'einstieg-form' },
-      el('h2', null, 'Keine Verbindung'), el('p', { class: 'unter' }, e.message),
-      el('button', { class: 'btn primaer', type: 'button', onclick: App.starten }, 'Erneut versuchen'))));
+      el('h2', null, t('app.keineVerbindung')), el('p', { class: 'unter' }, e.message),
+      el('button', { class: 'btn primaer', type: 'button', onclick: App.starten }, t('app.erneut')))));
     return;
   }
   if (!App.status.eingerichtet) einrichtenSeite();
@@ -80,18 +80,21 @@ App.abgemeldet = function () {
   if (App._abmeldenLaeuft) return;
   App._abmeldenLaeuft = true;
   setTimeout(() => { App._abmeldenLaeuft = false; }, 1500);
-  toast('Abgemeldet — bitte neu anmelden. Laufende Sitzungen bleiben erhalten.');
+  toast(t('app.abgemeldet'));
   App.starten();
 };
 
-function einstiegRahmen(formular) {
+// mitSprache: Umschalter «Deutsch / English» oben rechts (nicht auf der Seite mit dem
+// Sicherheitsschluessel: Er wird nur einmal angezeigt, ein Neuladen wuerde ihn verlieren).
+function einstiegRahmen(formular, mitSprache) {
   return el('div', { class: 'einstieg' },
+    mitSprache ? App.sprachUmschalter('oben') : null,
     el('div', { class: 'einstieg-bild' },
       logoLink(40),
       el('div', { class: 'platz', style: { flex: 1 } }),
-      el('div', { class: 'term-deko' }, '$ ssh admin@server\nverbunden · ed25519\n$ '),
-      el('h1', null, 'Alle Server. Ein Browser-Tab.'),
-      el('p', null, 'Terminal, Dateien und Befehlshilfe an einem Ort — auch auf dem Telefon. Passwörter und Schlüssel bleiben verschlüsselt.'),
+      el('div', { class: 'term-deko', 'aria-hidden': 'true' }, t('app.einstieg.deko')),
+      el('h1', null, t('app.einstieg.titel')),
+      el('p', null, t('app.einstieg.text')),
       el('div', { class: 'platz', style: { flex: 1 } }),
       el('div', { class: 'fuss' }, erstelltVon())),
     el('div', { class: 'einstieg-form' }, formular));
@@ -103,106 +106,105 @@ function formFeld(id, label, typ, extra) {
 }
 
 function einrichtenSeite() {
-  const [b, bFeld] = formFeld('s-benutzer', 'Benutzername', 'text', { autocomplete: 'username', value: 'admin' });
-  const [p1, p1Feld] = formFeld('s-pw', 'Passwort', 'password', { autocomplete: 'new-password' });
-  const [p2, p2Feld] = formFeld('s-pw2', 'Passwort wiederholen', 'password', { autocomplete: 'new-password' });
+  const [b, bFeld] = formFeld('s-benutzer', t('app.feld.benutzer'), 'text', { autocomplete: 'username', value: 'admin' });
+  const [p1, p1Feld] = formFeld('s-pw', t('app.feld.passwort'), 'password', { autocomplete: 'new-password' });
+  const [p2, p2Feld] = formFeld('s-pw2', t('app.feld.passwort2'), 'password', { autocomplete: 'new-password' });
   const meldung = el('div');
-  const knopf = el('button', { class: 'btn primaer voll', type: 'submit' }, 'Einrichten');
+  const knopf = el('button', { class: 'btn primaer voll', type: 'submit' }, t('app.einrichten.knopf'));
   const form = el('form', { style: { display: 'flex', flexDirection: 'column', gap: '18px' }, onsubmit: async (e) => {
     e.preventDefault();
     ersetzen(meldung);
-    if (p1.value !== p2.value) { meldung.append(el('div', { class: 'meldung fehler' }, 'Die Passwörter stimmen nicht überein.')); return; }
-    knopf.disabled = true; knopf.textContent = 'Richte ein …';
+    if (p1.value !== p2.value) { meldung.append(el('div', { class: 'meldung fehler' }, t('app.pwUngleich'))); return; }
+    knopf.disabled = true; knopf.textContent = t('app.einrichten.laeuft');
     try {
       const r = await api('POST', '/api/einrichten', { benutzer: b.value.trim(), passwort: p1.value });
       lokalSetzen('benutzer', b.value.trim());
       sicherheitsschluesselSeite(r.sicherheitsschluessel, b.value.trim());
     } catch (err) {
       meldung.append(el('div', { class: 'meldung fehler' }, err.message));
-      knopf.disabled = false; knopf.textContent = 'Einrichten';
+      knopf.disabled = false; knopf.textContent = t('app.einrichten.knopf');
     }
   } },
-    el('h2', null, 'Willkommen'),
-    el('p', { class: 'unter' }, 'Lege den Benutzer für diese App fest. Das Passwort entsperrt auch den Tresor mit deinen SSH-Zugängen.'),
-    bFeld, p1Feld, el('div', { class: 'hinweis', style: { fontSize: '12.5px', color: 'var(--leise)', marginTop: '-10px' } }, 'Mindestens ' + App.status.minPasswort + ' Zeichen'), p2Feld,
+    el('h2', null, t('app.einrichten.titel')),
+    el('p', { class: 'unter' }, t('app.einrichten.text')),
+    bFeld, p1Feld, el('div', { class: 'hinweis', style: { fontSize: '12.5px', color: 'var(--leise)', marginTop: '-10px' } }, t('app.einrichten.minPw', { n: App.status.minPasswort })), p2Feld,
     meldung, knopf,
     el('div', { class: 'reihe', style: { justifyContent: 'space-between' } },
-      el('span', { style: { color: 'var(--leise)', fontSize: '14px' } }, 'Umzug von einem anderen System?'),
-      el('button', { class: 'textlink', type: 'button', onclick: () => App.backupEinspielen(false) }, 'Backup einspielen')));
-  ersetzen(document.getElementById('app'), einstiegRahmen(form));
+      el('span', { style: { color: 'var(--leise)', fontSize: '14px' } }, t('app.einrichten.umzug')),
+      el('button', { class: 'textlink', type: 'button', onclick: () => App.backupEinspielen(false) }, t('app.einrichten.einspielen'))));
+  ersetzen(document.getElementById('app'), einstiegRahmen(form, true));
   if (!App.istTelefon()) p1.focus();
 }
 
 function sicherheitsschluesselSeite(schluessel, benutzer) {
   const ok = el('input', { type: 'checkbox', onchange: () => { weiter.disabled = !ok.checked; } });
-  const weiter = el('button', { class: 'btn primaer voll', type: 'button', disabled: true, onclick: () => App.starten() }, 'Weiter zur App');
-  const datei = 'SSH-App Sicherheitsschlüssel\n\nBenutzer: ' + benutzer + '\nErstellt: ' + new Date().toLocaleString('de-CH') + '\nAdresse: ' + location.origin +
-    '\n\nSicherheitsschlüssel:\n' + schluessel + '\n\nMit diesem Schlüssel kannst du das Passwort zurücksetzen und Backups einspielen.\nSicher aufbewahren (Passwort-Manager, ausgedruckt) und nicht weitergeben.\n';
+  const weiter = el('button', { class: 'btn primaer voll', type: 'button', disabled: true, onclick: () => App.starten() }, t('app.schluessel.weiter'));
+  const datei = t('app.schluessel.datei', { benutzer, zeit: new Date().toLocaleString(lokalCode()), adresse: location.origin, schluessel });
   const inhalt = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '18px' } },
-    el('h2', null, 'Dein Sicherheitsschlüssel'),
-    el('p', { class: 'unter' }, 'Damit setzt du das Passwort zurück und spielst ein Backup auf einem anderen System ein. Er wird nur jetzt angezeigt — ohne ihn sind Backups nicht lesbar.'),
-    el('div', { class: 'schluessel-box', 'aria-label': 'Sicherheitsschlüssel' }, schluessel),
+    el('h2', null, t('app.schluessel.titel')),
+    el('p', { class: 'unter' }, t('app.schluessel.text')),
+    el('div', { class: 'schluessel-box', 'aria-label': t('app.schluessel.name') }, schluessel),
     el('div', { class: 'reihe' },
-      el('button', { class: 'btn', type: 'button', onclick: () => kopieren(schluessel) }, icon('kopieren'), 'Kopieren'),
-      el('button', { class: 'btn', type: 'button', onclick: () => textDatei('ssh-app-sicherheitsschluessel.txt', datei) }, icon('runter'), 'Als Datei speichern')),
-    el('div', { class: 'meldung warn' }, icon('warnung'), el('span', null, 'Bewahre ihn getrennt von der App auf, zum Beispiel in deinem Passwort-Manager.')),
-    el('label', { class: 'check' }, ok, el('span', null, 'Ich habe den Sicherheitsschlüssel sicher aufbewahrt.')),
+      el('button', { class: 'btn', type: 'button', onclick: () => kopieren(schluessel) }, icon('kopieren'), t('app.schluessel.kopieren')),
+      el('button', { class: 'btn', type: 'button', onclick: () => textDatei(t('app.schluessel.dateiname'), datei) }, icon('runter'), t('app.schluessel.speichern'))),
+    el('div', { class: 'meldung warn' }, icon('warnung'), el('span', null, t('app.schluessel.warn'))),
+    el('label', { class: 'check' }, ok, el('span', null, t('app.schluessel.ok'))),
     weiter);
   ersetzen(document.getElementById('app'), einstiegRahmen(inhalt));
 }
 
 function anmeldeSeite() {
-  const [b, bFeld] = formFeld('a-benutzer', 'Benutzername', 'text', { autocomplete: 'username', value: lokal('benutzer', '') });
-  const [p, pFeld] = formFeld('a-pw', 'Passwort', 'password', { autocomplete: 'current-password' });
+  const [b, bFeld] = formFeld('a-benutzer', t('app.feld.benutzer'), 'text', { autocomplete: 'username', value: lokal('benutzer', '') });
+  const [p, pFeld] = formFeld('a-pw', t('app.feld.passwort'), 'password', { autocomplete: 'current-password' });
   const meldung = el('div');
-  const knopf = el('button', { class: 'btn primaer voll', type: 'submit' }, 'Anmelden');
+  const knopf = el('button', { class: 'btn primaer voll', type: 'submit' }, t('app.anmelden.knopf'));
   const form = el('form', { style: { display: 'flex', flexDirection: 'column', gap: '18px' }, onsubmit: async (e) => {
     e.preventDefault();
     ersetzen(meldung);
-    knopf.disabled = true; knopf.textContent = 'Prüfe …';
+    knopf.disabled = true; knopf.textContent = t('app.anmelden.laeuft');
     try {
       await api('POST', '/api/anmelden', { benutzer: b.value.trim(), passwort: p.value });
       lokalSetzen('benutzer', b.value.trim());
       App.starten();
     } catch (err) {
       meldung.append(el('div', { class: 'meldung fehler' }, err.message));
-      knopf.disabled = false; knopf.textContent = 'Anmelden';
+      knopf.disabled = false; knopf.textContent = t('app.anmelden.knopf');
       p.select();
     }
   } },
-    el('h2', null, 'Anmelden'),
-    el('p', { class: 'unter' }, 'Die Anmeldung entsperrt auch den Tresor.'),
+    el('h2', null, t('app.anmelden.titel')),
+    el('p', { class: 'unter' }, t('app.anmelden.text')),
     bFeld, pFeld, meldung, knopf,
-    el('button', { class: 'textlink', type: 'button', onclick: zuruecksetzenSeite }, 'Passwort vergessen? Mit Sicherheitsschlüssel zurücksetzen'),
-    el('p', { style: { margin: 0, fontSize: '13px', color: 'var(--leise)', lineHeight: 1.5 } }, 'Nach 5 Fehlversuchen ist die Anmeldung von diesem Gerät 15 Minuten gesperrt.'));
-  ersetzen(document.getElementById('app'), einstiegRahmen(form));
+    el('button', { class: 'textlink', type: 'button', onclick: zuruecksetzenSeite }, t('app.anmelden.vergessen')),
+    el('p', { style: { margin: 0, fontSize: '13px', color: 'var(--leise)', lineHeight: 1.5 } }, t('app.anmelden.sperre')));
+  ersetzen(document.getElementById('app'), einstiegRahmen(form, true));
   if (!App.istTelefon()) (b.value ? p : b).focus();
 }
 
 function zuruecksetzenSeite() {
   const k = el('textarea', { id: 'r-key', spellcheck: 'false', autocapitalize: 'characters', style: { minHeight: '84px' }, placeholder: 'ABCD-EFGH-…' });
-  const [b, bFeld] = formFeld('r-benutzer', 'Benutzername (neu oder bisher)', 'text', { autocomplete: 'username', value: lokal('benutzer', '') });
-  const [p1, p1Feld] = formFeld('r-pw', 'Neues Passwort', 'password', { autocomplete: 'new-password' });
-  const [p2, p2Feld] = formFeld('r-pw2', 'Neues Passwort wiederholen', 'password', { autocomplete: 'new-password' });
+  const [b, bFeld] = formFeld('r-benutzer', t('app.zurueck.benutzer'), 'text', { autocomplete: 'username', value: lokal('benutzer', '') });
+  const [p1, p1Feld] = formFeld('r-pw', t('app.zurueck.pw'), 'password', { autocomplete: 'new-password' });
+  const [p2, p2Feld] = formFeld('r-pw2', t('app.zurueck.pw2'), 'password', { autocomplete: 'new-password' });
   const meldung = el('div');
   const form = el('form', { style: { display: 'flex', flexDirection: 'column', gap: '18px' }, onsubmit: async (e) => {
     e.preventDefault();
     ersetzen(meldung);
-    if (p1.value !== p2.value) { meldung.append(el('div', { class: 'meldung fehler' }, 'Die Passwörter stimmen nicht überein.')); return; }
+    if (p1.value !== p2.value) { meldung.append(el('div', { class: 'meldung fehler' }, t('app.pwUngleich'))); return; }
     try {
       await api('POST', '/api/zuruecksetzen', { schluessel: k.value, benutzer: b.value.trim(), passwort: p1.value });
       lokalSetzen('benutzer', b.value.trim());
-      toast('Passwort neu gesetzt — bitte anmelden');
+      toast(t('app.zurueck.ok'));
       App.starten();
     } catch (err) { meldung.append(el('div', { class: 'meldung fehler' }, err.message)); }
   } },
-    el('h2', null, 'Passwort zurücksetzen'),
-    el('p', { class: 'unter' }, 'Mit dem Sicherheitsschlüssel aus der Einrichtung. Deine Hosts und Zugänge bleiben erhalten.'),
-    el('div', { class: 'feld' }, el('label', { for: 'r-key' }, 'Sicherheitsschlüssel'), k),
+    el('h2', null, t('app.zurueck.titel')),
+    el('p', { class: 'unter' }, t('app.zurueck.text')),
+    el('div', { class: 'feld' }, el('label', { for: 'r-key' }, t('app.schluessel.name')), k),
     bFeld, p1Feld, p2Feld, meldung,
-    el('button', { class: 'btn primaer voll', type: 'submit' }, 'Passwort setzen'),
-    el('button', { class: 'textlink', type: 'button', onclick: anmeldeSeite }, 'Zurück zur Anmeldung'));
-  ersetzen(document.getElementById('app'), einstiegRahmen(form));
+    el('button', { class: 'btn primaer voll', type: 'submit' }, t('app.zurueck.knopf')),
+    el('button', { class: 'textlink', type: 'button', onclick: anmeldeSeite }, t('app.zurueck.zurAnmeldung')));
+  ersetzen(document.getElementById('app'), einstiegRahmen(form, true));
 }
 
 // ---------- Arbeitsplatz ----------
@@ -231,21 +233,21 @@ async function arbeitsplatz() {
   App.rundfunkBand = el('div', { class: 'rundfunk versteckt' });
   App.schleier = el('div', { class: 'schleier versteckt', style: { zIndex: 35 }, onclick: () => { for (const n of ['links', 'dateien', 'hilfe']) App.seiteUmschalten(n, false); } });
   App.knoepfe = {
-    dateien: ikonKnopf('ordner', 'Dateien', () => App.seiteUmschalten('dateien')),
-    hilfe: ikonKnopf('hilfe', 'Befehlshilfe', () => App.seiteUmschalten('hilfe')),
-    rundfunk: ikonKnopf('funk', 'Eingaben an alle Tabs senden', () => App.rundfunkSetzen(!App.rundfunk), { class: 'ikon nur-desktop' }),
+    dateien: ikonKnopf('ordner', t('app.kopf.dateien'), () => App.seiteUmschalten('dateien')),
+    hilfe: ikonKnopf('hilfe', t('app.kopf.hilfe'), () => App.seiteUmschalten('hilfe')),
+    rundfunk: ikonKnopf('funk', t('app.kopf.rundfunk'), () => App.rundfunkSetzen(!App.rundfunk), { class: 'ikon nur-desktop' }),
   };
 
   const kopf = el('header', { class: 'kopf' },
-    ikonKnopf('menue', 'Hosts und Tresor', () => App.seiteUmschalten('links'), { class: 'ikon nur-telefon' }),
+    ikonKnopf('menue', t('app.kopf.hosts'), () => App.seiteUmschalten('links'), { class: 'ikon nur-telefon' }),
     el('div', { class: 'marke nur-desktop' }, logoLink(24), el('span', { class: 'trenner' }), el('span', { class: 'name' }, 'SSH-App')),
     App.tabWahl,
-    el('button', { class: 'btn klein primaer nur-desktop', type: 'button', style: { marginLeft: '16px' }, onclick: () => App.palette('') }, icon('plus'), 'Neue Sitzung'),
+    el('button', { class: 'btn klein primaer nur-desktop', type: 'button', style: { marginLeft: '16px' }, onclick: () => App.palette('') }, icon('plus'), t('app.kopf.neu')),
     el('div', { class: 'platz nur-desktop' }),
-    el('button', { class: 'suche nur-desktop', type: 'button', onclick: () => App.palette() }, icon('suche', 15), el('span', null, 'Suchen …'), el('kbd', null, 'Strg ⇧ K')),
+    el('button', { class: 'suche nur-desktop', type: 'button', onclick: () => App.palette() }, icon('suche', 15), el('span', null, t('app.kopf.suchen')), el('kbd', null, t('app.kopf.suchenTaste'))),
     App.knoepfe.rundfunk, App.knoepfe.dateien, App.knoepfe.hilfe,
-    el('span', { class: 'tresor-chip nur-desktop', title: 'Tresor entsperrt — sperrt nach ' + App.status.leerlaufMin + ' Minuten ohne Bedienung' }, icon('schloss', 14), 'Tresor offen'),
-    ikonKnopf('mehr', 'Menü', (e) => hauptMenue(e.currentTarget)));
+    el('span', { class: 'tresor-chip nur-desktop', title: t('app.kopf.tresorTitel', { min: App.status.leerlaufMin }) }, icon('schloss', 14), t('app.kopf.tresor')),
+    ikonKnopf('mehr', t('app.kopf.menue'), (e) => hauptMenue(e.currentTarget)));
 
   const tasten = telefonTasten();
   const mitte = el('main', { class: 'mitte' }, App.tabsLeiste, App.terms, App.statusleiste, tasten);
@@ -259,9 +261,9 @@ async function arbeitsplatz() {
     const laufend = await api('GET', '/api/sitzungen');
     for (const s of laufend) if (!s.beendet) App.tabs.push(new App.TerminalTab({ sitzungId: s.id, hostId: s.hostId, titel: s.titel }));
   } catch (e) { /* leer */ }
-  for (const t of App.tabs) App.terms.append(t.element);
+  for (const tt of App.tabs) App.terms.append(tt.element);
   App.aktivieren(App.tabs[App.tabs.length - 1] || null);
-  if (App.tabs.length) toast(App.tabs.length === 1 ? '1 laufende Sitzung wieder angehängt' : App.tabs.length + ' laufende Sitzungen wieder angehängt');
+  if (App.tabs.length) toast(App.tabs.length === 1 ? t('app.wiederAngehaengt1') : t('app.wiederAngehaengt', { n: App.tabs.length }));
 }
 
 App.datenLaden = async function () {
@@ -303,16 +305,21 @@ App.blaetterZu = function () {
 telefonAbfrage.addEventListener('change', () => { if (App.seitenleiste) { App.seiten.links = !App.istTelefon(); seitenZeichnen(); App.tabsZeichnen(); } });
 
 function hauptMenue(anker) {
+  // Sprache: Der Eintrag nennt die andere Sprache in ihrer eigenen Schreibweise (so findet ihn auch,
+  // wer die aktuelle nicht liest), darunter klein «Sprache wechseln».
+  const andere = SPRACHEN.find((s) => s.id !== I18N.sprache) || SPRACHEN[0];
   menue(anker, [
-    App.istTelefon() ? { text: 'Suchen und neue Sitzung', icon: 'suche', aktion: () => App.palette('') } : null,
-    App.istTelefon() && App.offeneTabs().length > 1 ? { text: App.rundfunk ? 'An alle senden: aus' : 'An alle Tabs senden', icon: 'funk', aktion: () => App.rundfunkSetzen(!App.rundfunk) } : null,
-    App.istTelefon() ? { text: 'Schrift grösser', icon: 'schrift', aktion: () => App.schriftSetzen(App.schriftGroesse() + 1) } : null,
-    App.istTelefon() ? { text: 'Schrift kleiner', icon: 'schrift', aktion: () => App.schriftSetzen(App.schriftGroesse() - 1) } : null,
-    { text: 'Einstellungen und Backup', icon: 'zahnrad', aktion: () => App.einstellungen() },
-    { text: 'Abmelden (Sitzungen laufen weiter)', icon: 'abmelden', aktion: abmelden },
-    App.offeneTabs().length ? { text: 'Alle Sitzungen beenden und abmelden', icon: 'abmelden', gefahr: true, aktion: async () => {
-      if (!(await frage('Alle Terminal-Sitzungen beenden und abmelden?', { ja: 'Beenden', gefahr: true }))) return;
-      for (const t of App.tabs) if (t.sitzungId) await api('DELETE', '/api/sitzungen/' + t.sitzungId).catch(() => {});
+    App.istTelefon() ? { text: t('app.menue.suchen'), icon: 'suche', aktion: () => App.palette('') } : null,
+    App.istTelefon() && App.offeneTabs().length > 1 ? { text: App.rundfunk ? t('app.menue.rundfunkAus') : t('app.menue.rundfunkAn'), icon: 'funk', aktion: () => App.rundfunkSetzen(!App.rundfunk) } : null,
+    App.istTelefon() ? { text: t('app.menue.schriftGroesser'), icon: 'schrift', aktion: () => App.schriftSetzen(App.schriftGroesse() + 1) } : null,
+    App.istTelefon() ? { text: t('app.menue.schriftKleiner'), icon: 'schrift', aktion: () => App.schriftSetzen(App.schriftGroesse() - 1) } : null,
+    { text: t('app.menue.einstellungen'), icon: 'zahnrad', aktion: () => App.einstellungen() },
+    { text: el('span', { class: 'menue-text' }, el('span', { lang: andere.id }, andere.name), el('small', null, t('basis.spracheWechseln'))),
+      icon: 'sprache', aktion: () => App.spracheWechseln(andere.id) },
+    { text: t('app.menue.abmelden'), icon: 'abmelden', aktion: abmelden },
+    App.offeneTabs().length ? { text: t('app.menue.alleBeenden'), icon: 'abmelden', gefahr: true, aktion: async () => {
+      if (!(await frage(t('app.menue.alleBeendenFrage'), { ja: t('app.beenden'), gefahr: true }))) return;
+      for (const tt of App.tabs) if (tt.sitzungId) await api('DELETE', '/api/sitzungen/' + tt.sitzungId).catch(() => {});
       abmelden();
     } } : null,
     { text: 'IoTUeli — iotueli.ch', icon: 'link', aktion: () => window.open(IOTUELI, '_blank', 'noopener') },
@@ -326,13 +333,13 @@ async function abmelden() {
 
 // ---------- Tabs ----------
 
-App.offeneTabs = () => App.tabs.filter((t) => t.zustand !== 'beendet' && t.zustand !== 'fehler');
+App.offeneTabs = () => App.tabs.filter((tt) => tt.zustand !== 'beendet' && tt.zustand !== 'fehler');
 
 App.verbinden = function (host) {
-  const t = new App.TerminalTab({ hostId: host.id, titel: host.name });
-  App.tabs.push(t);
-  App.terms.append(t.element);
-  App.aktivieren(t);
+  const tt = new App.TerminalTab({ hostId: host.id, titel: host.name });
+  App.tabs.push(tt);
+  App.terms.append(tt.element);
+  App.aktivieren(tt);
 };
 
 App.neuVerbinden = function (tab) {
@@ -343,12 +350,17 @@ App.neuVerbinden = function (tab) {
 
 App.aktivieren = function (tab) {
   App.aktiv = tab;
-  for (const t of App.tabs) t.element.style.display = t === tab ? '' : 'none';
+  for (const tt of App.tabs) tt.element.style.display = tt === tab ? '' : 'none';
   App.start.classList.toggle('versteckt', !!tab);
   if (!tab) startZeichnen();
   App.tabsZeichnen();
   if (tab) {
-    setTimeout(() => { tab.anpassen(true); if (!App.istTelefon()) tab.term.focus(); }, 20);
+    // Nur in das Terminal, wenn nichts anderes den Fokus braucht: Eine Rueckfrage (Host-Schluessel,
+    // Anmeldung) kann bei nahen Hosts schon vor Ablauf der 20 ms offen sein.
+    setTimeout(() => {
+      tab.anpassen(true);
+      if (!App.istTelefon() && App.aktiv === tab && !dialogStapel.length && !menue.offen && !(App.paletteObj && App.paletteObj.offen)) tab.term.focus();
+    }, 20);
   }
   if (App.dateien) App.dateien.fuerTab(tab);
   if (App.hilfe && tab) App.hilfe.zeile(tab.aktuelleZeile());
@@ -365,41 +377,41 @@ App.tabEntfernen = function (tab) {
 
 App.tabSchliessen = async function (tab) {
   if (tab.zustand === 'bereit' || tab.zustand === 'getrennt' || tab.zustand === 'abgeloest') {
-    const text = tab.zustand === 'abgeloest' ? `Sitzung «${tab.titel}» beenden? Sie ist gerade in einem anderen Fenster offen und wird dort ebenfalls beendet.` : `Sitzung «${tab.titel}» beenden?`;
-    if (!(await frage(text, { ja: 'Beenden', gefahr: true }))) return;
+    const text = t(tab.zustand === 'abgeloest' ? 'app.tab.beendenFrageAnderes' : 'app.tab.beendenFrage', { titel: tab.titel });
+    if (!(await frage(text, { ja: t('app.beenden'), gefahr: true }))) return;
   }
   if (tab.sitzungId) api('DELETE', '/api/sitzungen/' + tab.sitzungId).catch(() => {});
   App.tabEntfernen(tab);
 };
 
-function tabHost(t) { return App.daten.hosts.find((x) => x.id === t.hostId); }
+function tabHost(tt) { return App.daten.hosts.find((x) => x.id === tt.hostId); }
 
 App.tabsZeichnen = function () {
   if (!App.tabsLeiste) return;
   ersetzen(App.tabsLeiste,
-    ...App.tabs.map((t) => el('div', { class: 'tab' + (t === App.aktiv ? ' aktiv' : ''), role: 'tab', 'aria-selected': t === App.aktiv ? 'true' : 'false', title: t.titel + ' — ' + App.zustandText(t.zustand) },
-      el('button', { class: 'tab-knopf', type: 'button', onclick: () => App.aktivieren(t), onauxclick: (e) => { if (e.button === 1) App.tabSchliessen(t); } },
-        hostSymbol(tabHost(t), 16, t.zustand), el('span', { class: 't' }, t.titel)),
-      el('button', { class: 'zu', type: 'button', 'aria-label': 'Tab schliessen', onclick: () => App.tabSchliessen(t) }, icon('x', 14)))),
-    ikonKnopf('plus', 'Neue Sitzung', () => App.palette(''), { class: 'ikon tab-neu' }));
+    ...App.tabs.map((tt) => el('div', { class: 'tab' + (tt === App.aktiv ? ' aktiv' : ''), role: 'tab', 'aria-selected': tt === App.aktiv ? 'true' : 'false', title: tt.titel + ' — ' + App.zustandText(tt.zustand) },
+      el('button', { class: 'tab-knopf', type: 'button', onclick: () => App.aktivieren(tt), onauxclick: (e) => { if (e.button === 1) App.tabSchliessen(tt); } },
+        hostSymbol(tabHost(tt), 16, tt.zustand), el('span', { class: 't' }, tt.titel)),
+      el('button', { class: 'zu', type: 'button', 'aria-label': t('app.tab.schliessen'), title: t('app.tab.schliessen'), onclick: () => App.tabSchliessen(tt) }, icon('x', 14)))),
+    ikonKnopf('plus', t('app.kopf.neu'), () => App.palette(''), { class: 'ikon tab-neu' }));
   // Telefon: Titel des aktiven Tabs als Auswahl
-  const t = App.aktiv;
+  const tt = App.aktiv;
   ersetzen(App.tabWahl,
-    t ? hostSymbol(tabHost(t), 18, t.zustand) : null,
-    el('span', { class: 't' }, t ? t.titel : 'SSH-App'),
-    t && t.zustand !== 'bereit' ? el('span', { class: 'sr' }, App.zustandText(t.zustand)) : null,
+    tt ? hostSymbol(tabHost(tt), 18, tt.zustand) : null,
+    el('span', { class: 't' }, tt ? tt.titel : 'SSH-App'),
+    tt && tt.zustand !== 'bereit' ? el('span', { class: 'sr' }, App.zustandText(tt.zustand)) : null,
     App.tabs.length > 1 ? el('span', { class: 'chip' }, String(App.tabs.length)) : null,
     icon('pfeilRunter', 14));
   // Statusleiste (Desktop)
-  if (t) {
-    const h = tabHost(t);
+  if (tt) {
+    const h = tabHost(tt);
     ersetzen(App.statusleiste,
-      el('span', { class: 'zustand z-' + t.zustand }, el('span', { class: 'hsym-punkt', 'aria-hidden': 'true' }), App.zustandText(t.zustand)),
-      h ? el('span', { class: 'geraet' }, geraetIcon(h.geraet, 14), geraetFuer(h.geraet).de) : null,
+      el('span', { class: 'zustand z-' + tt.zustand }, el('span', { class: 'hsym-punkt', 'aria-hidden': 'true' }), App.zustandText(tt.zustand)),
+      h ? el('span', { class: 'geraet' }, geraetIcon(h.geraet, 14), geraetName(h.geraet)) : null,
       h ? el('span', null, hostZeile(h)) : null,
-      t.fingerprint ? el('span', null, t.fingerprint) : null,
-      el('span', null, t.term.cols + ' × ' + t.term.rows));
-  } else ersetzen(App.statusleiste, el('span', null, 'Keine Sitzung'));
+      tt.fingerprint ? el('span', null, tt.fingerprint) : null,
+      el('span', null, tt.term.cols + ' × ' + tt.term.rows));
+  } else ersetzen(App.statusleiste, el('span', null, t('app.keineSitzung')));
   // Punkte der verbundenen Hosts nachfuehren, ohne ein Filterfeld beim Tippen zu stoeren.
   if (App.seitenleiste && App.seitenleiste.reiter === 'hosts' && !App.seitenleiste.element.contains(document.activeElement)) App.seitenleiste.zeichnen();
 };
@@ -407,10 +419,10 @@ App.tabsZeichnen = function () {
 function tabMenue(anker) {
   if (!App.tabs.length) { App.palette(''); return; }
   menue(anker, [
-    ...App.tabs.map((t) => ({ text: el('span', { class: 'menue-text' }, el('span', null, t.titel), t.zustand !== 'bereit' ? el('small', null, App.zustandText(t.zustand)) : null),
-      symbol: hostSymbol(tabHost(t), 18, t.zustand), aktiv: t === App.aktiv, aktion: () => App.aktivieren(t) })),
-    { text: 'Neue Sitzung', icon: 'plus', aktion: () => App.palette('') },
-    App.aktiv ? { text: 'Diesen Tab schliessen', icon: 'x', gefahr: true, aktion: () => App.tabSchliessen(App.aktiv) } : null,
+    ...App.tabs.map((tt) => ({ text: el('span', { class: 'menue-text' }, el('span', null, tt.titel), tt.zustand !== 'bereit' ? el('small', null, App.zustandText(tt.zustand)) : null),
+      symbol: hostSymbol(tabHost(tt), 18, tt.zustand), aktiv: tt === App.aktiv, aktion: () => App.aktivieren(tt) })),
+    { text: t('app.kopf.neu'), icon: 'plus', aktion: () => App.palette('') },
+    App.aktiv ? { text: t('app.tab.diesenSchliessen'), icon: 'x', gefahr: true, aktion: () => App.tabSchliessen(App.aktiv) } : null,
   ]);
 }
 
@@ -419,19 +431,19 @@ function startZeichnen() {
   const zuletzt = lokal('zuletzt', []);
   const sortiert = [...d.hosts].sort((a, b) => {
     const ia = zuletzt.indexOf(a.id), ib = zuletzt.indexOf(b.id);
-    return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib) || a.name.localeCompare(b.name);
+    return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib) || a.name.localeCompare(b.name, lokalCode());
   });
   ersetzen(App.start, 
-    el('h2', null, d.hosts.length ? 'Verbinden mit …' : 'Willkommen'),
-    d.hosts.length ? el('div', { class: 'karten' }, sortiert.map((h) => el('button', { class: 'karte', type: 'button', title: geraetFuer(h.geraet).de, onclick: () => App.verbinden(h) },
+    el('h2', null, d.hosts.length ? t('app.start.verbinden') : t('app.start.willkommen')),
+    d.hosts.length ? el('div', { class: 'karten' }, sortiert.map((h) => el('button', { class: 'karte', type: 'button', title: geraetName(h.geraet), onclick: () => App.verbinden(h) },
       hostSymbol(h, 20),
       el('span', { class: 'haupt' }, el('b', null, h.name), el('small', null, hostZeile(h))),
       icon('weiter')))) :
-      el('p', { style: { margin: 0, color: 'var(--text2)', lineHeight: 1.6, maxWidth: '560px' } }, 'Lege deinen ersten Host an. Zugangsdaten kannst du im Tresor speichern oder beim Verbinden eingeben.'),
+      el('p', { style: { margin: 0, color: 'var(--text2)', lineHeight: 1.6, maxWidth: '560px' } }, t('app.start.leer')),
     el('div', { class: 'reihe' },
-      el('button', { class: 'btn primaer', type: 'button', onclick: () => App.hostBearbeiten({}) }, icon('plus'), 'Host anlegen'),
-      el('button', { class: 'btn', type: 'button', onclick: () => App.zugangBearbeiten({}) }, icon('schluessel'), 'Zugang anlegen'),
-      el('button', { class: 'btn', type: 'button', onclick: () => App.palette() }, icon('hilfe'), 'Befehlshilfe')),
+      el('button', { class: 'btn primaer', type: 'button', onclick: () => App.hostBearbeiten({}) }, icon('plus'), t('app.start.hostAnlegen')),
+      el('button', { class: 'btn', type: 'button', onclick: () => App.zugangBearbeiten({}) }, icon('schluessel'), t('app.start.zugangAnlegen')),
+      el('button', { class: 'btn', type: 'button', onclick: () => App.palette() }, icon('hilfe'), t('app.start.hilfe'))),
     el('p', { style: { marginTop: 'auto', fontSize: '13px', color: 'var(--leise)' } }, erstelltVon()));
 }
 
@@ -453,16 +465,16 @@ App.hostkeyFragen = function (n, tab) {
     let ok = false;
     const geaendert = n.status === 'geaendert';
     const d = dialog({
-      titel: geaendert ? 'Host-Schlüssel hat sich geändert' : 'Neuer Host',
+      titel: geaendert ? t('app.hostkey.titelGeaendert') : t('app.hostkey.titelNeu'),
       inhalt: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
-        geaendert ? el('div', { class: 'meldung fehler' }, icon('warnung'), el('span', null, el('b', null, 'Vorsicht. '),
-          'Der Server meldet sich mit einem anderen Schlüssel als beim letzten Mal. Das passiert nach einer Neuinstallation — oder wenn jemand die Verbindung abfängt. Nur annehmen, wenn du den Grund kennst.')) :
-          el('p', { style: { margin: 0, lineHeight: 1.55, color: 'var(--text2)' } }, 'Erste Verbindung zu ', el('b', { class: 'mono' }, n.ziel), '. Wenn du sicher sein willst: Fingerabdruck auf dem Server mit ', el('code', null, 'ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub'), ' vergleichen.'),
-        geaendert && n.altFp ? el('div', { class: 'feld' }, el('span', { class: 'label' }, 'Bisher'), el('div', { class: 'fp' }, n.altFp)) : null,
-        el('div', { class: 'feld' }, el('span', { class: 'label' }, (geaendert ? 'Jetzt' : 'Fingerabdruck') + ' · ' + n.typ), el('div', { class: 'fp' }, n.fp))),
+        geaendert ? el('div', { class: 'meldung fehler' }, icon('warnung'), el('span', null, el('b', null, t('app.hostkey.vorsicht')), ' ', t('app.hostkey.geaendert'))) :
+          el('p', { style: { margin: 0, lineHeight: 1.55, color: 'var(--text2)' } },
+            tTeile('app.hostkey.erste', { ziel: el('b', { class: 'mono' }, n.ziel), befehl: el('code', null, 'ssh-keygen -lf /etc/ssh/ssh_host_*_key.pub') })),
+        geaendert && n.altFp ? el('div', { class: 'feld' }, el('span', { class: 'label' }, t('app.hostkey.bisher')), el('div', { class: 'fp' }, n.altFp)) : null,
+        el('div', { class: 'feld' }, el('span', { class: 'label' }, (geaendert ? t('app.hostkey.jetzt') : t('app.hostkey.fingerabdruck')) + ' · ' + n.typ), el('div', { class: 'fp' }, n.fp))),
       knoepfe: [
-        el('button', { class: 'btn', type: 'button', onclick: () => d.zu() }, 'Abbrechen'),
-        el('button', { class: 'btn ' + (geaendert ? 'gefahr' : 'primaer'), type: 'button', onclick: () => { ok = true; d.zu(); } }, geaendert ? 'Neuen Schlüssel annehmen' : 'Vertrauen und verbinden'),
+        el('button', { class: 'btn', type: 'button', onclick: () => d.zu() }, t('basis.abbrechen')),
+        el('button', { class: 'btn ' + (geaendert ? 'gefahr' : 'primaer'), type: 'button', onclick: () => { ok = true; d.zu(); } }, geaendert ? t('app.hostkey.annehmen') : t('app.hostkey.vertrauen')),
       ],
       beimSchliessen: () => { if (tab && tab.rueckfrage === d) tab.rueckfrage = null; resolve(ok); },
     });
@@ -480,15 +492,15 @@ App.anmeldungFragen = function (n, tab) {
     const merken = el('input', { id: 'f-speichern', type: 'checkbox' });
     const los = () => { wert = { benutzer: b.value.trim(), passwort: p.value, speichern: merken.checked }; d.zu(); };
     const d = dialog({
-      titel: 'Anmelden bei ' + n.ziel,
+      titel: t('app.login.titel', { ziel: n.ziel }),
       inhalt: el('form', { onsubmit: (e) => { e.preventDefault(); los(); }, style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
-        el('div', { class: 'feld' }, el('label', { for: 'f-b' }, 'Benutzer'), b),
-        el('div', { class: 'feld' }, el('label', { for: 'f-p' }, 'Passwort'), p),
+        el('div', { class: 'feld' }, el('label', { for: 'f-b' }, t('app.login.benutzer')), b),
+        el('div', { class: 'feld' }, el('label', { for: 'f-p' }, t('app.login.passwort')), p),
         el('label', { class: 'check', for: 'f-speichern' }, merken,
-          el('span', null, 'Zugangsdaten für diesen Host speichern', el('br'),
-            el('span', { style: { color: 'var(--leise)', fontSize: '13px' } }, 'Verschlüsselt im Tresor — beim nächsten Mal ohne Rückfrage.'))),
+          el('span', null, t('app.login.speichern'), el('br'),
+            el('span', { style: { color: 'var(--leise)', fontSize: '13px' } }, t('app.login.speichernHinweis')))),
         el('button', { type: 'submit', class: 'versteckt' })),
-      knoepfe: [el('button', { class: 'btn', type: 'button', onclick: () => d.zu() }, 'Abbrechen'), el('button', { class: 'btn primaer', type: 'button', onclick: los }, 'Verbinden')],
+      knoepfe: [el('button', { class: 'btn', type: 'button', onclick: () => d.zu() }, t('basis.abbrechen')), el('button', { class: 'btn primaer', type: 'button', onclick: los }, t('app.login.verbinden'))],
       beimSchliessen: () => { if (tab && tab.rueckfrage === d) tab.rueckfrage = null; resolve(wert); },
     });
     if (tab) tab.rueckfrage = d;
@@ -499,22 +511,24 @@ App.anmeldungFragen = function (n, tab) {
 // ---------- Befehle einfuegen ----------
 
 function aktiverHost() { return App.aktiv && App.daten.hosts.find((h) => h.id === App.aktiv.hostId); }
-function istKritisch(h) { return h && (h.tags || []).some((t) => t.toLowerCase() === 'kritisch'); }
+// Tag «kritisch» (deutsch) oder «critical» (englisch): Rueckfrage vor gefaehrlichen Befehlen.
+const KRITISCH_TAGS = ['kritisch', 'critical'];
+function istKritisch(h) { return !!h && (h.tags || []).some((tt) => KRITISCH_TAGS.includes(String(tt).trim().toLowerCase())); }
 
 // opt.zeileErsetzen: die schon getippte Eingabe ersetzen (Beispiel aus der Hilfe zur aktuellen Zeile),
 // statt den Befehl an «tar» anzuhaengen («tartar -xf …»).
 App.befehlEinfuegen = async function (text, opt) {
   const o = opt || {};
-  const t = App.aktiv;
-  if (!t || t.zustand !== 'bereit') { toast('Keine verbundene Sitzung', 'fehler'); return; }
+  const tt = App.aktiv;
+  if (!tt || tt.zustand !== 'bereit') { toast(t('app.keineSitzungVerbunden'), 'fehler'); return; }
   const h = aktiverHost();
   if (istGefaehrlich(text) && istKritisch(h)) {
-    if (!(await frage(`«${h.name}» ist als kritisch markiert, und der Befehl kann Daten löschen oder den Host anhalten:`, { titel: 'Gefährlicher Befehl', ja: 'Trotzdem einfügen', gefahr: true, befehl: text }))) return;
-    if (App.aktiv !== t || t.zustand !== 'bereit') return; // inzwischen gewechselt oder getrennt
+    if (!(await frage(t('app.gefahr.frage', { name: h.name }), { titel: t('app.gefahr.titel'), ja: t('app.gefahr.trotzdem'), gefahr: true, befehl: text }))) return;
+    if (App.aktiv !== tt || tt.zustand !== 'bereit') return; // inzwischen gewechselt oder getrennt
   }
   App.blaetterZu();
-  if (o.zeileErsetzen && t.aktuelleZeile()) t.tippen('\x05\x15'); // ans Zeilenende, dann die Zeile leeren (readline)
-  t.einfuegen(text);
+  if (o.zeileErsetzen && tt.aktuelleZeile()) tt.tippen('\x05\x15'); // ans Zeilenende, dann die Zeile leeren (readline)
+  tt.einfuegen(text);
 };
 
 App.befehlVorbereiten = function (befehl, titel, opt) {
@@ -530,9 +544,9 @@ App.befehlVorbereiten = function (befehl, titel, opt) {
   });
   zeichnen();
   const d = dialog({
-    titel: ohneCode(titel || 'Befehl'),
+    titel: ohneCode(titel || t('app.befehl.titel')),
     inhalt: el('form', { onsubmit: (e) => { e.preventDefault(); los(); }, style: { display: 'flex', flexDirection: 'column', gap: '14px' } }, vorschau, felder, el('button', { type: 'submit', class: 'versteckt' })),
-    knoepfe: [el('button', { class: 'btn', type: 'button', onclick: () => d.zu() }, 'Abbrechen'), el('button', { class: 'btn primaer', type: 'button', onclick: los }, icon('einfuegen'), 'Einfügen')],
+    knoepfe: [el('button', { class: 'btn', type: 'button', onclick: () => d.zu() }, t('basis.abbrechen')), el('button', { class: 'btn primaer', type: 'button', onclick: los }, icon('einfuegen'), t('app.befehl.einfuegen'))],
   });
 };
 
@@ -541,14 +555,14 @@ App.befehlVorbereiten = function (befehl, titel, opt) {
 // Ausfuehren leert zuerst die Eingabezeile (Strg+E, Strg+U), damit nichts Halbgetipptes
 // mitlaeuft («rm -rf » + «cd …»), und schickt Enter hinter der Klammer von Bracketed Paste.
 App.inTerminal = function (text, ausfuehren) {
-  const t = App.aktiv;
-  if (!t || t.zustand !== 'bereit') { toast('Keine verbundene Sitzung', 'fehler'); return; }
+  const tt = App.aktiv;
+  if (!tt || tt.zustand !== 'bereit') { toast(t('app.keineSitzungVerbunden'), 'fehler'); return; }
   App.seiteUmschalten('dateien', false, true);
-  if (!ausfuehren) { t.einfuegen(text, { nurHier: true }); return; }
-  if (t.term.buffer.active.type === 'alternate') { toast('Im Terminal läuft ein Vollbild-Programm (z.B. nano oder less) — erst beenden', 'fehler'); return; }
-  t.sendenRoh(kodierer.encode('\x05\x15' + t.geklammert(text.replace(/\r$/, '')) + '\r'));
-  t.startMerken('\r');
-  if (!App.istTelefon()) t.term.focus();
+  if (!ausfuehren) { tt.einfuegen(text, { nurHier: true }); return; }
+  if (tt.term.buffer.active.type === 'alternate') { toast(t('app.vollbild'), 'fehler'); return; }
+  tt.sendenRoh(kodierer.encode('\x05\x15' + tt.geklammert(text.replace(/\r$/, '')) + '\r'));
+  tt.startMerken('\r');
+  if (!App.istTelefon()) tt.term.focus();
 };
 
 App.palette = function (start) {
@@ -563,30 +577,30 @@ App.hilfeBeiEingabe = function (tab) {
 // ---------- An alle senden ----------
 
 App.rundfunkSetzen = function (an) {
-  const andere = App.offeneTabs().filter((t) => t.zustand === 'bereit');
-  if (an && andere.length < 2) { toast('Dafür braucht es mindestens zwei verbundene Tabs', 'fehler'); return; }
+  const andere = App.offeneTabs().filter((tt) => tt.zustand === 'bereit');
+  if (an && andere.length < 2) { toast(t('app.rundfunk.zuWenig'), 'fehler'); return; }
   App.rundfunk = an;
   App.knoepfe.rundfunk.classList.toggle('an', an);
   App.rundfunkBand.classList.toggle('versteckt', !an);
-  ersetzen(App.rundfunkBand, icon('funk'), el('span', { style: { flex: 1 } }, 'Eingaben gehen an alle ' + andere.length + ' verbundenen Tabs: ' + andere.map((t) => t.titel).join(', ')),
-    el('button', { class: 'btn klein', type: 'button', onclick: () => App.rundfunkSetzen(false) }, 'Beenden'));
+  ersetzen(App.rundfunkBand, icon('funk'), el('span', { style: { flex: 1 } }, t('app.rundfunk.band', { n: andere.length, namen: andere.map((tt) => tt.titel).join(', ') })),
+    el('button', { class: 'btn klein', type: 'button', onclick: () => App.rundfunkSetzen(false) }, t('app.rundfunk.beenden')));
   setTimeout(() => App.aktiv && App.aktiv.anpassen(), 20);
 };
 App.rundfunkSenden = function (von, d) {
   // Einfuegen aus xterm kommt bei Bracketed Paste geklammert — jeder Ziel-Tab nach seinem eigenen Modus.
   const geklammert = d.startsWith('\x1b[200~') && d.endsWith('\x1b[201~');
   const roh = geklammert ? d.slice(6, -6) : d;
-  for (const t of App.tabs) if (t !== von && t.zustand === 'bereit') t.sendenRoh(kodierer.encode(geklammert ? t.geklammert(roh) : d));
+  for (const tt of App.tabs) if (tt !== von && tt.zustand === 'bereit') tt.sendenRoh(kodierer.encode(geklammert ? tt.geklammert(roh) : d));
 };
 App.anAlleSenden = async function (text) {
-  const ziele = App.tabs.filter((t) => t.zustand === 'bereit');
-  const kritisch = ziele.map((t) => App.daten.hosts.find((h) => h.id === t.hostId)).filter(istKritisch);
+  const ziele = App.tabs.filter((tt) => tt.zustand === 'bereit');
+  const kritisch = ziele.map((tt) => App.daten.hosts.find((h) => h.id === tt.hostId)).filter(istKritisch);
   const gefahr = istGefaehrlich(text);
-  let frageText = `Einfügen in ${ziele.length} Tabs (${ziele.map((t) => t.titel).join(', ')})?`;
-  if (gefahr && kritisch.length) frageText = 'Gefährlicher Befehl auf kritischen Hosts (' + kritisch.map((h) => h.name).join(', ') + ')!\n\n' + frageText;
-  if (!(await frage(frageText, { titel: 'An alle Tabs', ja: 'Einfügen', gefahr, befehl: text }))) return;
+  let frageText = t('app.rundfunk.frage', { n: ziele.length, namen: ziele.map((tt) => tt.titel).join(', ') });
+  if (gefahr && kritisch.length) frageText = t('app.rundfunk.gefahr', { namen: kritisch.map((h) => h.name).join(', ') }) + '\n\n' + frageText;
+  if (!(await frage(frageText, { titel: t('app.rundfunk.titel'), ja: t('app.befehl.einfuegen'), gefahr, befehl: text }))) return;
   // nurHier: jeder Tab genau einmal, auch wenn «An alle senden» gerade an ist.
-  for (const t of ziele) if (t.zustand === 'bereit') t.einfuegen(text, { nurHier: true, ohneFokus: t !== App.aktiv });
+  for (const tt of ziele) if (tt.zustand === 'bereit') tt.einfuegen(text, { nurHier: true, ohneFokus: tt !== App.aktiv });
 };
 
 // ---------- Tastenleiste fuers Telefon ----------
@@ -623,39 +637,39 @@ App.modSetzen = function (k, an) {
 
 function telefonTasten() {
   const pfeil = (normal, app) => () => {
-    const t = App.aktiv; if (!t) return;
-    const seq = t.term.modes && t.term.modes.applicationCursorKeysMode ? app : normal;
-    t.tippen(seq);
+    const tt = App.aktiv; if (!tt) return;
+    const seq = tt.term.modes && tt.term.modes.applicationCursorKeysMode ? app : normal;
+    tt.tippen(seq);
   };
   const taste = (beschr, aktion, extra) => el('button', Object.assign({ type: 'button', 'aria-label': (extra && extra.label) || beschr,
     onpointerdown: (e) => e.preventDefault(), // Tastatur bleibt offen
     onclick: () => { aktion(); } }, extra && extra.attrs), extra && extra.icon ? icon(extra.icon, 18) : beschr);
   const senden = (s) => () => App.aktiv && App.aktiv.tippen(s);
-  return el('div', { class: 'tasten', role: 'toolbar', 'aria-label': 'Sondertasten' },
+  return el('div', { class: 'tasten', role: 'toolbar', 'aria-label': t('app.tasten.name') },
     taste('Esc', senden('\x1b')),
     taste('Tab', senden('\t')),
     taste('Ctrl', () => App.modSetzen('ctrl', !App.mod.ctrl), { attrs: { 'data-mod': 'ctrl', 'aria-pressed': 'false' } }),
     taste('Alt', () => App.modSetzen('alt', !App.mod.alt), { attrs: { 'data-mod': 'alt', 'aria-pressed': 'false' } }),
-    taste('^C', senden('\x03'), { label: 'Strg C (abbrechen)' }),
+    taste('^C', senden('\x03'), { label: t('app.tasten.strgC') }),
     el('span', { class: 'trenn' }),
-    taste('', pfeil('\x1b[D', '\x1bOD'), { icon: 'pfeilLinks', label: 'Pfeil links' }),
-    taste('', pfeil('\x1b[A', '\x1bOA'), { icon: 'pfeilHoch', label: 'Pfeil hoch' }),
-    taste('', pfeil('\x1b[B', '\x1bOB'), { icon: 'pfeilRunter', label: 'Pfeil runter' }),
-    taste('', pfeil('\x1b[C', '\x1bOC'), { icon: 'pfeilRechts', label: 'Pfeil rechts' }),
+    taste('', pfeil('\x1b[D', '\x1bOD'), { icon: 'pfeilLinks', label: t('app.tasten.links') }),
+    taste('', pfeil('\x1b[A', '\x1bOA'), { icon: 'pfeilHoch', label: t('app.tasten.hoch') }),
+    taste('', pfeil('\x1b[B', '\x1bOB'), { icon: 'pfeilRunter', label: t('app.tasten.runter') }),
+    taste('', pfeil('\x1b[C', '\x1bOC'), { icon: 'pfeilRechts', label: t('app.tasten.rechts') }),
     el('span', { class: 'trenn' }),
     taste('|', senden('|')), taste('~', senden('~')), taste('/', senden('/')), taste('-', senden('-')),
     taste('$', senden('$')), taste('&', senden('&')), taste('>', senden('>')),
     el('span', { class: 'trenn' }),
-    taste('Pos1', senden('\x1b[H'), { label: 'Zeilenanfang' }), taste('Ende', senden('\x1b[F'), { label: 'Zeilenende' }),
-    taste('Bild↑', senden('\x1b[5~'), { label: 'Seite hoch' }), taste('Bild↓', senden('\x1b[6~'), { label: 'Seite runter' }),
-    taste('^D', senden('\x04'), { label: 'Strg D (Ende)' }), taste('^Z', senden('\x1a'), { label: 'Strg Z' }), taste('^R', senden('\x12'), { label: 'Strg R (Verlauf suchen)' }),
+    taste(t('app.tasten.pos1'), senden('\x1b[H'), { label: t('app.tasten.pos1Name') }), taste(t('app.tasten.ende'), senden('\x1b[F'), { label: t('app.tasten.endeName') }),
+    taste(t('app.tasten.bildHoch'), senden('\x1b[5~'), { label: t('app.tasten.bildHochName') }), taste(t('app.tasten.bildRunter'), senden('\x1b[6~'), { label: t('app.tasten.bildRunterName') }),
+    taste('^D', senden('\x04'), { label: t('app.tasten.strgD') }), taste('^Z', senden('\x1a'), { label: t('app.tasten.strgZ') }), taste('^R', senden('\x12'), { label: t('app.tasten.strgR') }),
     el('span', { class: 'trenn' }),
     taste('', async () => {
-      try { const t = await navigator.clipboard.readText(); App.aktiv && App.aktiv.einfuegen(t); }
-      catch (e) { toast('Einfügen braucht HTTPS und die Erlaubnis des Browsers', 'fehler'); }
-    }, { icon: 'einfuegen', label: 'Aus Zwischenablage einfügen' }),
-    taste('', () => { const s = App.aktiv && App.aktiv.term.getSelection(); if (s) kopieren(s); else toast('Erst Text markieren (lange drücken)'); }, { icon: 'kopieren', label: 'Markierung kopieren' }),
-    taste('', () => App.aktiv && App.aktiv.term.focus(), { icon: 'tastatur', label: 'Tastatur zeigen' }));
+      try { const text = await navigator.clipboard.readText(); App.aktiv && App.aktiv.einfuegen(text); }
+      catch (e) { toast(t('app.tasten.einfuegenFehler'), 'fehler'); }
+    }, { icon: 'einfuegen', label: t('app.tasten.einfuegen') }),
+    taste('', () => { const s = App.aktiv && App.aktiv.term.getSelection(); if (s) kopieren(s); else toast(t('app.tasten.erstMarkieren')); }, { icon: 'kopieren', label: t('app.tasten.kopieren') }),
+    taste('', () => App.aktiv && App.aktiv.term.focus(), { icon: 'tastatur', label: t('app.tasten.tastatur') }));
 }
 
 // ---------- globale Tasten und Lebenszeichen ----------
@@ -674,10 +688,10 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
   // Telefon aus dem Hintergrund: sofort neu verbinden statt auf den Zeitgeber zu warten, und
   // scheinbar offene Verbindungen pruefen (nach einem Netzwechsel oft halb offen).
-  for (const t of App.tabs) {
-    if (t.zustand === 'getrennt') t.sofortNeu();
-    else if (t.zustand === 'bereit') {
-      if (!t.ws || t.ws.readyState > 1) { t.verbindungZu(0); t.sofortNeu(); } else t.lebenszeichen(4000);
+  for (const tt of App.tabs) {
+    if (tt.zustand === 'getrennt') tt.sofortNeu();
+    else if (tt.zustand === 'bereit') {
+      if (!tt.ws || tt.ws.readyState > 1) { tt.verbindungZu(0); tt.sofortNeu(); } else tt.lebenszeichen(4000);
     }
   }
   if (App.status.angemeldet) api('GET', '/api/status', undefined, { auto: true }).then((s) => { if (!s.angemeldet) App.abgemeldet(); }).catch(() => {});

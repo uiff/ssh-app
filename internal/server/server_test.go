@@ -40,6 +40,7 @@ type sshOptionen struct {
 	// "fish" = die Login-Shell versteht den Startbefehl nicht (Fehlertext, Code 127).
 	exec     string
 	ohneSFTP bool
+	flut     bool // die Shell gibt ohne Pause Ausgabe aus
 }
 
 type testSSH struct {
@@ -76,6 +77,16 @@ func sshTestServerMit(t *testing.T, o sshOptionen) *testSSH {
 	}
 	shell := func(ch ssh.Channel) {
 		ch.Write([]byte("willkommen\r\n$ "))
+		if o.flut {
+			go func() {
+				zeile := bytes.Repeat([]byte("flut "), 6000)
+				for {
+					if _, err := ch.Write(zeile); err != nil {
+						return
+					}
+				}
+			}()
+		}
 		go func() {
 			buf := make([]byte, 1024)
 			for {

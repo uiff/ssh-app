@@ -49,7 +49,7 @@ RUN apk add --no-cache curl zip \
 # --- 3. Laufzeit: distroless, laeuft als Benutzer «nonroot» (65532) --------
 FROM gcr.io/distroless/static-debian12:nonroot
 LABEL org.opencontainers.image.title="ssh-app" \
-      org.opencontainers.image.description="Web-SSH-Client mit Tresor, Dateileiste und Befehlshilfe" \
+      org.opencontainers.image.description="Web SSH client with vault, files and command help" \
       org.opencontainers.image.source="https://github.com/uiff/ssh-app" \
       org.opencontainers.image.vendor="IoTUeli" \
       org.opencontainers.image.licenses="MIT"

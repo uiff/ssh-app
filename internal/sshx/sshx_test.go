@@ -16,6 +16,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/uiff/ssh-app/internal/texte"
 )
 
 // sshServer ist ein minimaler SSH-Dienst (nur Anmeldung, keine Kanaele).
@@ -83,7 +85,7 @@ func pi(host string, port int) Ziel {
 
 func TestVerbindenUndAnmeldung(t *testing.T) {
 	host, port := sshServer(t)
-	c, zu, err := Verbinden(context.Background(), pi(host, port), nil, alleAnnehmen)
+	c, zu, err := Verbinden(context.Background(), pi(host, port), alleAnnehmen)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -92,12 +94,12 @@ func TestVerbindenUndAnmeldung(t *testing.T) {
 
 	z := pi(host, port)
 	z.Anmeldung.Passwort = "falsch"
-	if _, _, err := Verbinden(context.Background(), z, nil, alleAnnehmen); !errors.Is(err, ErrAnmeldung) {
+	if _, _, err := Verbinden(context.Background(), z, alleAnnehmen); !errors.Is(err, ErrAnmeldung) {
 		t.Fatalf("falsches Passwort: %v", err)
 	}
 	// Abgelehnter Host-Schluessel: die Meldung des Pruefers, ohne «ssh: handshake failed».
 	nein := errors.New("Host-Schlüssel nicht bestätigt — Verbindung abgebrochen")
-	_, _, err = Verbinden(context.Background(), pi(host, port), nil, func(string, ssh.PublicKey) error { return nein })
+	_, _, err = Verbinden(context.Background(), pi(host, port), func(string, ssh.PublicKey) error { return nein })
 	if err == nil || err.Error() != nein.Error() {
 		t.Fatalf("abgelehnter Host-Schlüssel: %v", err)
 	}
@@ -106,15 +108,15 @@ func TestVerbindenUndAnmeldung(t *testing.T) {
 // V6: kein «dial tcp …: connection refused», sondern ein deutscher Satz.
 func TestVerbindungAbgelehnt(t *testing.T) {
 	port := freierPort(t)
-	_, _, err := Verbinden(context.Background(), pi("127.0.0.1", port), nil, alleAnnehmen)
+	_, _, err := Verbinden(context.Background(), pi("127.0.0.1", port), alleAnnehmen)
 	want := "Verbindung abgelehnt — läuft auf 127.0.0.1:" + strconv.Itoa(port) + " ein SSH-Dienst?"
 	if err == nil || err.Error() != want {
 		t.Fatalf("Meldung: %v", err)
 	}
-	// Ueber einen Jump-Host mit Praefix.
-	j := pi("127.0.0.1", port)
-	if _, _, err := Verbinden(context.Background(), pi("127.0.0.1", 22), &j, alleAnnehmen); err == nil || !strings.HasPrefix(err.Error(), "Jump-Host: Verbindung abgelehnt") {
-		t.Fatalf("Jump-Host: %v", err)
+	// Dieselbe Meldung auf Englisch.
+	want = "Connection refused — is an SSH server running on 127.0.0.1:" + strconv.Itoa(port) + "?"
+	if got := texte.Uebersetzen(texte.EN, err); got != want {
+		t.Fatalf("englisch: %q", got)
 	}
 }
 
@@ -137,7 +139,7 @@ func TestKeineAntwortNachFrist(t *testing.T) {
 	}()
 	port := l.Addr().(*net.TCPAddr).Port
 	start := time.Now()
-	_, _, err = Verbinden(context.Background(), pi("127.0.0.1", port), nil, alleAnnehmen)
+	_, _, err = Verbinden(context.Background(), pi("127.0.0.1", port), alleAnnehmen)
 	if err == nil || !strings.HasPrefix(err.Error(), "Keine Antwort von 127.0.0.1:"+strconv.Itoa(port)+" — läuft dort ein SSH-Dienst?") {
 		t.Fatalf("Meldung: %v", err)
 	}
@@ -151,7 +153,7 @@ func TestRueckfrageZaehltNicht(t *testing.T) {
 	fristen(t, time.Second, 300*time.Millisecond)
 	host, port := sshServer(t)
 	langsam := func(string, ssh.PublicKey) error { time.Sleep(700 * time.Millisecond); return nil }
-	c, zu, err := Verbinden(context.Background(), pi(host, port), nil, langsam)
+	c, zu, err := Verbinden(context.Background(), pi(host, port), langsam)
 	if err != nil {
 		t.Fatalf("Rückfrage wurde der Frist angerechnet: %v", err)
 	}
@@ -163,7 +165,7 @@ func TestAbbruchDurchAufrufer(t *testing.T) {
 	host, port := sshServer(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	pruefer := func(string, ssh.PublicKey) error { cancel(); time.Sleep(50 * time.Millisecond); return nil }
-	if _, _, err := Verbinden(ctx, pi(host, port), nil, pruefer); !errors.Is(err, ErrAbgebrochen) {
+	if _, _, err := Verbinden(ctx, pi(host, port), pruefer); !errors.Is(err, ErrAbgebrochen) {
 		t.Fatalf("Abbruch: %v", err)
 	}
 }
@@ -185,8 +187,6 @@ func TestNetzFehlerTexte(t *testing.T) {
 		{op(syscall.ENETUNREACH), "plc.halle ist nicht erreichbar (kein Weg ins Netz)"},
 		{op(syscall.ECONNREFUSED), "Verbindung abgelehnt — läuft auf plc.halle:22 ein SSH-Dienst?"},
 		{&net.OpError{Op: "dial", Net: "tcp", Err: zeitFehler{}}, "Keine Antwort von plc.halle (Zeitüberschreitung nach 15 s)"},
-		{&weiterleitFehler{&ssh.OpenChannelError{Reason: ssh.ConnectionFailed, Message: "Connection refused"}}, "Verbindung abgelehnt — läuft auf plc.halle:22 ein SSH-Dienst?"},
-		{&weiterleitFehler{&ssh.OpenChannelError{Reason: ssh.Prohibited, Message: "administratively prohibited"}}, "Der Jump-Host erlaubt keine Weiterleitung (AllowTcpForwarding)"},
 		{errors.New("irgendwas Neues"), "Verbindung zu plc.halle:22 fehlgeschlagen"},
 	}
 	for _, f := range faelle {

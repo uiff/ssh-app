@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/uiff/ssh-app/internal/texte"
 )
 
 // schreiber ist eine Shell-Eingabe zum Mitlesen.
@@ -55,10 +57,10 @@ func (e *empfang) empfaenger() Empfaenger {
 			e.daten.Write(b)
 			return true
 		},
-		Ende: func(g string) {
+		Ende: func(g *texte.Meldung) {
 			e.mu.Lock()
 			defer e.mu.Unlock()
-			e.ende = g
+			e.ende = g.Text(texte.DE)
 		},
 		Abgeloest: func() {
 			e.mu.Lock()
@@ -171,11 +173,11 @@ func TestOffeneOSCHaeltNichtFest(t *testing.T) {
 
 	// Ein Rest beim Ende geht in den Puffer und an den Browser.
 	s.verarbeiten([]byte("\x1b]ende"))
-	s.Beenden("Test")
+	s.Beenden(GrundGeschlossen)
 	if !strings.Contains(string(s.ring), "\x1b]ende") || !strings.Contains(e.text(), "\x1b]ende") {
 		t.Fatalf("Rest bei Ende verloren: Ring %q", s.ring)
 	}
-	if e.ende != "Test" {
+	if e.ende != "Sitzung geschlossen" {
 		t.Fatalf("Ende-Meldung: %q", e.ende)
 	}
 }
@@ -208,7 +210,7 @@ func TestAlterEmpfaengerLoestNeuenNicht(t *testing.T) {
 	close(weiter)
 	<-fertig
 
-	if !s.Info().Angehaengt || !b.Aktuell() {
+	if !s.Info(texte.DE).Angehaengt || !b.Aktuell() {
 		t.Fatal("der neue Browser wurde vom alten abgehängt")
 	}
 	s.verarbeiten([]byte("zwei"))
@@ -258,7 +260,7 @@ func TestLiveErstNachFreigabe(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("verarbeiten hängt nach Loesen")
 	}
-	if f.text() != "" || s.Info().Angehaengt {
+	if f.text() != "" || s.Info(texte.DE).Angehaengt {
 		t.Fatalf("nach Loesen noch Ausgabe/angehängt: %q", f.text())
 	}
 }
@@ -290,7 +292,7 @@ func TestAbloesenSperrtAltenBrowser(t *testing.T) {
 		t.Fatalf("Eingaben in der Shell: %q", stdin.String())
 	}
 	a.Loesen() // darf den neuen nicht loesen
-	if !s.Info().Angehaengt {
+	if !s.Info(texte.DE).Angehaengt {
 		t.Fatal("Loesen des alten hat den neuen abgehängt")
 	}
 }
@@ -302,7 +304,7 @@ func TestBeendetBleibtZumNachlesen(t *testing.T) {
 	m.sitzung[s.id] = s
 	jetzt := time.Now()
 	s.losSeit = jetzt.Add(-30 * time.Minute)
-	s.Beenden("Shell beendet (Code 0)")
+	s.Beenden(GrundShell(0))
 	m.raeumen(jetzt.Add(time.Minute))
 	if _, ok := m.Hole(s.id); !ok {
 		t.Fatal("eben beendete Sitzung sofort entfernt")
@@ -319,5 +321,41 @@ func TestPidMarkeWirdEntfernt(t *testing.T) {
 	s.verarbeiten([]byte("42\x07b"))
 	if string(s.ring) != "ab" || s.pid != 4242 {
 		t.Fatalf("Ring %q, PID %d", s.ring, s.pid)
+	}
+}
+
+// Befund: Beenden wartet nicht bis zur Schreibfrist eines Browsers, der nicht mehr liest.
+func TestBeendenBrichtHaengendesSchreibenAb(t *testing.T) {
+	alt := abbruchFrist
+	abbruchFrist = 100 * time.Millisecond
+	t.Cleanup(func() { abbruchFrist = alt })
+	s, _ := testSitzung()
+	haengt := make(chan struct{}, 1)
+	los := make(chan struct{})
+	var abgebrochen sync.Once
+	a, _, _, _ := s.Anhaengen(Empfaenger{
+		Daten: func([]byte) bool {
+			select {
+			case haengt <- struct{}{}:
+			default:
+			}
+			<-los // wie ein Schreibvorgang an einen toten Browser (bis zur Frist)
+			return false
+		},
+		Abbrechen: func() { abgebrochen.Do(func() { close(los) }) },
+	})
+	a.Freigeben()
+	go s.verarbeiten([]byte("viel Ausgabe"))
+	<-haengt
+	start := time.Now()
+	s.Beenden(GrundGeschlossen)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("Beenden dauerte %s", d)
+	}
+	if b, g := s.Beendet(); !b || g.Text(texte.EN) != "Session closed" {
+		t.Fatalf("Ende: %v %v", b, g)
+	}
+	if got := s.Info(texte.EN).Grund; got != "Session closed" {
+		t.Fatalf("Grund englisch: %q", got)
 	}
 }

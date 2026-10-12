@@ -1,0 +1,46 @@
+package texte
+
+// Texte des SSH-Verbindungsaufbaus (internal/sshx).
+func init() {
+	Eintragen(map[string]string{
+		"sshx.anmeldung.abgelehnt":              "Anmeldung abgelehnt — Benutzer, Passwort oder Schlüssel prüfen",
+		"sshx.schluessel.passphrase.fehlt":      "Der Schlüssel ist mit einer Passphrase geschützt — im Zugang hinterlegen",
+		"sshx.schluessel.passphrase.falsch":     "Die Passphrase passt nicht zum Schlüssel",
+		"sshx.schluessel.unlesbar":              "Das ist kein lesbarer privater Schlüssel (OpenSSH- oder PEM-Format erwartet)",
+		"sshx.schluessel.oeffentlich.ungueltig": "Der öffentliche Schlüssel ist ungültig",
+		"sshx.abgebrochen":                      "Verbindungsaufbau abgebrochen",
+		"sshx.kein.geheimnis":                   "Kein Passwort und kein Schlüssel hinterlegt",
+		"sshx.netz.keine.antwort":               "Keine Antwort von %s (Zeitüberschreitung nach %d s)",
+		"sshx.netz.name.unbekannt":              "Name %s unbekannt",
+		"sshx.netz.name.dns":                    "Name %s lässt sich nicht auflösen (Namensdienst antwortet nicht)",
+		"sshx.netz.abgelehnt":                   "Verbindung abgelehnt — läuft auf %s ein SSH-Dienst?",
+		"sshx.netz.kein.weg":                    "%s ist nicht erreichbar (kein Weg ins Netz)",
+		"sshx.netz.zurueckgesetzt":              "Die Verbindung zu %s wurde zurückgesetzt",
+		"sshx.netz.fehlgeschlagen":              "Verbindung zu %s fehlgeschlagen",
+		"sshx.ssh.keine.antwort":                "Keine Antwort von %s — läuft dort ein SSH-Dienst? (Zeitüberschreitung nach %d s)",
+		"sshx.ssh.beendet":                      "%s hat die Verbindung beendet — läuft dort ein SSH-Dienst, und lässt er diese Adresse zu?",
+		"sshx.ssh.verfahren":                    "%s bietet keine gemeinsamen Verschlüsselungsverfahren an (Gerät zu alt?)",
+		"sshx.ssh.kein.ssh":                     "%s spricht kein SSH",
+		"sshx.ssh.fehlgeschlagen":               "SSH-Verbindung zu %s fehlgeschlagen",
+	}, map[string]string{
+		"sshx.anmeldung.abgelehnt":              "Sign-in rejected — check the user, password, or key",
+		"sshx.schluessel.passphrase.fehlt":      "The key is protected by a passphrase — add it to the credential",
+		"sshx.schluessel.passphrase.falsch":     "The passphrase does not match the key",
+		"sshx.schluessel.unlesbar":              "This is not a readable private key (OpenSSH or PEM format expected)",
+		"sshx.schluessel.oeffentlich.ungueltig": "The public key is invalid",
+		"sshx.abgebrochen":                      "Connection canceled",
+		"sshx.kein.geheimnis":                   "No password or key stored",
+		"sshx.netz.keine.antwort":               "No response from %s (timed out after %d s)",
+		"sshx.netz.name.unbekannt":              "Unknown host name %s",
+		"sshx.netz.name.dns":                    "Cannot resolve %s (DNS server not responding)",
+		"sshx.netz.abgelehnt":                   "Connection refused — is an SSH server running on %s?",
+		"sshx.netz.kein.weg":                    "%s is unreachable (no route to host)",
+		"sshx.netz.zurueckgesetzt":              "The connection to %s was reset",
+		"sshx.netz.fehlgeschlagen":              "Connection to %s failed",
+		"sshx.ssh.keine.antwort":                "No response from %s — is an SSH server running there? (timed out after %d s)",
+		"sshx.ssh.beendet":                      "%s closed the connection — is an SSH server running there, and does it allow this address?",
+		"sshx.ssh.verfahren":                    "%s offers no common encryption algorithms (device too old?)",
+		"sshx.ssh.kein.ssh":                     "%s does not speak SSH",
+		"sshx.ssh.fehlgeschlagen":               "SSH connection to %s failed",
+	})
+}

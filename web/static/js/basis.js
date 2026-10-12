@@ -62,6 +62,11 @@ const ICONS = {
   speichern: 'M5 3h11l3 3v15H5zM8 3v5h7M8 21v-7h8v7',
   schrift: 'M4 20l6-16h2l6 16M7 14h8',
   fenster: 'M3 5h18v14H3zM3 9h18M6 7h.01M9 7h.01',
+  sprache: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20',
+  // Spezialdateien in der Dateileiste: Pipe (Rohrstueck), Geraet (Chip), Socket (Stecker).
+  pipe: 'M2 9h13v6H2zM15 7h3v10h-3zM18 12h4',
+  geraet: 'M7 7h10v10H7zM10 4v3M14 4v3M10 17v3M14 17v3M4 10h3M4 14h3M17 10h3M17 14h3',
+  socket: 'M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0zM12 17v5',
 };
 function icon(name, groesse) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -89,19 +94,20 @@ class ApiFehler extends Error {
 const OFFENE_ROUTEN = ['/api/status', '/api/anmelden', '/api/einrichten', '/api/zuruecksetzen', '/api/einspielen'];
 
 // opt.auto: automatische Abfrage (Zeitgeber, Wiederverbinden). Sie verlaengert die Anmeldung nicht.
+// Jede Anfrage nennt die Sprache der Oberflaeche (Fehlermeldungen des Servers kommen darin).
 async function api(methode, pfad, rumpf, opt) {
-  const kopf = { 'X-SSH-App': '1' };
+  const kopf = { 'X-SSH-App': '1', 'X-SSH-App-Sprache': I18N.sprache };
   if (opt && opt.auto) kopf['X-SSH-App-Auto'] = '1';
   const o = { method: methode, headers: kopf, credentials: 'same-origin' };
   if (rumpf instanceof FormData) o.body = rumpf;
   else if (rumpf !== undefined) { o.body = JSON.stringify(rumpf); kopf['Content-Type'] = 'application/json'; }
   let res;
   try { res = await fetch(pfad, o); }
-  catch (e) { throw new ApiFehler('Server nicht erreichbar — Netzwerkverbindung prüfen', 0); }
+  catch (e) { throw new ApiFehler(t('basis.netzFehler'), 0); }
   let daten = null;
   try { daten = await res.json(); } catch (e) { /* leer */ }
   if (!res.ok) {
-    const f = new ApiFehler((daten && daten.fehler) || ('Fehler ' + res.status), res.status);
+    const f = new ApiFehler((daten && daten.fehler) || t('basis.fehlerStatus', { status: res.status }), res.status);
     const offen = OFFENE_ROUTEN.some((r) => pfad === r || pfad.startsWith(r + '?'));
     if (res.status === 401 && !offen && App.status && App.status.angemeldet && App.abgemeldet) {
       f.abgemeldet = true; // App.abgemeldet meldet es schon — kein zweiter Toast
@@ -114,9 +120,9 @@ async function api(methode, pfad, rumpf, opt) {
 
 // ---------- Meldungen ----------
 function toast(text, art) {
-  const t = el('div', { class: 'toast' + (art === 'fehler' ? ' fehler' : ''), role: 'status' }, text);
-  document.getElementById('toasts').append(t);
-  setTimeout(() => t.remove(), art === 'fehler' ? 6000 : 3200);
+  const k = el('div', { class: 'toast' + (art === 'fehler' ? ' fehler' : ''), role: 'status' }, text);
+  document.getElementById('toasts').append(k);
+  setTimeout(() => k.remove(), art === 'fehler' ? 6000 : 3200);
 }
 function fehlerToast(e) {
   if (e && e.abgemeldet) return;
@@ -130,6 +136,7 @@ function fehlerToast(e) {
 const ebenen = [];
 let ebenenWaechter = false; // liegt unser Verlaufseintrag gerade obenauf?
 let ebenenPopIgnorieren = false;
+let seiteLaedtNeu = false; // Neuladen laeuft: kein history.back() mehr, es braeche das Neuladen ab
 
 function ebeneAuf(schliessen) {
   const e = { schliessen };
@@ -148,7 +155,7 @@ function ebeneZu(e) {
   if (!ebenen.length) setTimeout(ebenenWaechterAbbauen, 0);
 }
 function ebenenWaechterAbbauen() {
-  if (ebenen.length || !ebenenWaechter) return;
+  if (ebenen.length || !ebenenWaechter || seiteLaedtNeu) return;
   ebenenWaechter = false;
   if (history.state && history.state.sshappEbene) { ebenenPopIgnorieren = true; history.back(); }
 }
@@ -179,7 +186,7 @@ function dialog({ titel, inhalt, knoepfe, breit, beimSchliessen, schliessbar = t
   const fuss = knoepfe && knoepfe.length ? el('div', { class: 'dialog-fuss' }, knoepfe) : null;
   const d = el('div', { class: 'dialog' + (breit ? ' breit' : ''), role: 'dialog', 'aria-modal': 'true', 'aria-label': titel, tabindex: '-1' },
     el('div', { class: 'blatt-griff', 'aria-hidden': 'true' }),
-    el('div', { class: 'dialog-kopf' }, el('h3', { text: titel }), schliessbar ? ikonKnopf('x', 'Schliessen', () => zu()) : null),
+    el('div', { class: 'dialog-kopf' }, el('h3', { text: titel }), schliessbar ? ikonKnopf('x', t('basis.schliessen'), () => zu()) : null),
     el('div', { class: 'dialog-inhalt' }, inhalt),
     fuss);
   const vorher = document.activeElement;
@@ -226,7 +233,7 @@ document.addEventListener('keydown', (e) => {
 }, true);
 
 // Rueckfrage. befehl (optional) steht abgesetzt in Festbreitenschrift unter dem Text.
-function frage(text, { titel = 'Bitte bestätigen', ja = 'OK', gefahr = false, befehl } = {}) {
+function frage(text, { titel = t('basis.bestaetigen'), ja = t('basis.ok'), gefahr = false, befehl } = {}) {
   return new Promise((resolve) => {
     let ergebnis = false;
     const d = dialog({
@@ -235,7 +242,7 @@ function frage(text, { titel = 'Bitte bestätigen', ja = 'OK', gefahr = false, b
         el('p', { class: 'frage-text' }, text),
         befehl ? el('div', { class: 'befehl-gross' }, befehl) : null),
       knoepfe: [
-        el('button', { class: 'btn', type: 'button', onclick: () => d.zu() }, 'Abbrechen'),
+        el('button', { class: 'btn', type: 'button', onclick: () => d.zu() }, t('basis.abbrechen')),
         el('button', { class: 'btn ' + (gefahr ? 'gefahr' : 'primaer'), type: 'button', onclick: () => { ergebnis = true; d.zu(); } }, ja),
       ],
       beimSchliessen: () => resolve(ergebnis),
@@ -243,7 +250,7 @@ function frage(text, { titel = 'Bitte bestätigen', ja = 'OK', gefahr = false, b
   });
 }
 
-function eingabe(label, { titel, wert = '', hinweis, passwort = false, ok = 'OK' } = {}) {
+function eingabe(label, { titel, wert = '', hinweis, passwort = false, ok = t('basis.ok') } = {}) {
   return new Promise((resolve) => {
     let ergebnis = null;
     const inp = el('input', { type: passwort ? 'password' : 'text', value: wert, autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' });
@@ -252,7 +259,7 @@ function eingabe(label, { titel, wert = '', hinweis, passwort = false, ok = 'OK'
     const d = dialog({
       titel: titel || label, inhalt: form,
       knoepfe: [
-        el('button', { class: 'btn', type: 'button', onclick: () => d.zu() }, 'Abbrechen'),
+        el('button', { class: 'btn', type: 'button', onclick: () => d.zu() }, t('basis.abbrechen')),
         el('button', { class: 'btn primaer', type: 'button', onclick: () => { ergebnis = inp.value; d.zu(); } }, ok),
       ],
       beimSchliessen: () => resolve(ergebnis),
@@ -316,18 +323,22 @@ function groesseText(n) {
   const e = ['KB', 'MB', 'GB', 'TB'];
   let i = -1;
   do { n /= 1024; i++; } while (n >= 1024 && i < e.length - 1);
-  return n.toFixed(n < 10 ? 1 : 0).replace('.', ',') + ' ' + e[i];
+  const stellen = n < 10 ? 1 : 0;
+  return n.toLocaleString(lokalCode(), { minimumFractionDigits: stellen, maximumFractionDigits: stellen }) + ' ' + e[i];
 }
 async function kopieren(text) {
-  try { await navigator.clipboard.writeText(text); toast('Kopiert'); }
+  try { await navigator.clipboard.writeText(text); toast(t('basis.kopiert')); }
   catch (e) {
-    const t = el('textarea', { style: { position: 'fixed', opacity: 0 } }, text);
-    document.body.append(t); t.select();
-    try { document.execCommand('copy'); toast('Kopiert'); } catch (e2) { toast('Kopieren nicht möglich', 'fehler'); }
-    t.remove();
+    const feld = el('textarea', { style: { position: 'fixed', opacity: 0 } }, text);
+    document.body.append(feld); feld.select();
+    try { document.execCommand('copy'); toast(t('basis.kopiert')); } catch (e2) { toast(t('basis.kopierenFehler'), 'fehler'); }
+    feld.remove();
   }
 }
+// Ein Download per Link kann keinen Kopf senden: Die Sprache fuer eine Fehlerantwort des Servers
+// geht als Parameter «sprache» mit.
 function herunterladen(href) {
+  if (/^\/api\//.test(href) && !/[?&]sprache=/.test(href)) href += (href.includes('?') ? '&' : '?') + 'sprache=' + I18N.sprache;
   const a = el('a', { href, download: '' });
   document.body.append(a); a.click(); a.remove();
 }
@@ -347,7 +358,7 @@ function mitCode(text) {
   const s = String(text || '');
   const teile = s.split('`');
   if (teile.length < 3 || teile.length % 2 === 0) return s;
-  return teile.map((t, i) => (i % 2 ? el('code', { class: 'inline' }, t) : t)).filter((t) => t !== '');
+  return teile.map((x, i) => (i % 2 ? el('code', { class: 'inline' }, x) : x)).filter((x) => x !== '');
 }
 function ohneCode(text) { return String(text || '').replace(/`/g, ''); }
 
@@ -378,7 +389,7 @@ function befehlAnzeige(befehl) {
   return frag;
 }
 
-// Erkennung gefaehrlicher Befehle (Rueckfrage bei Hosts mit Tag «kritisch»). Prueft jeden Teil einer
+// Erkennung gefaehrlicher Befehle (Rueckfrage bei Hosts mit Tag «kritisch»/«critical»). Prueft jeden Teil einer
 // Befehlskette einzeln und laesst Vorsilben wie sudo, doas, env, nohup oder VAR=wert weg.
 // Vorsilben, nach denen der eigentliche Befehl kommt, mit ihren Schaltern, die einen eigenen Wert haben.
 const VORSILBEN = {
@@ -388,10 +399,10 @@ const VORSILBEN = {
 };
 const SCHLUESSELWOERTER = ['{', '}', '!', 'then', 'do', 'else', 'if', 'while', 'until'];
 function istGefaehrlich(text) {
-  const t = String(text || '');
-  if (/:\(\)\s*\{/.test(t)) return true; // Fork-Bombe
-  if (/>\s*\/dev\/(sd|hd|vd|xvd|nvme|mmcblk|disk)/i.test(t)) return true; // Geraet ueberschreiben
-  for (const teil of t.split(/;|&&|\|\||\||\n|\$\(|`|\(|\)/)) {
+  const s = String(text || '');
+  if (/:\(\)\s*\{/.test(s)) return true; // Fork-Bombe
+  if (/>\s*\/dev\/(sd|hd|vd|xvd|nvme|mmcblk|disk)/i.test(s)) return true; // Geraet ueberschreiben
+  for (const teil of s.split(/;|&&|\|\||\||\n|\$\(|`|\(|\)/)) {
     const w = teil.trim().split(/\s+/).filter(Boolean);
     while (w.length) {
       if (/^\w+=/.test(w[0]) || SCHLUESSELWOERTER.includes(w[0])) { w.shift(); continue; }
@@ -426,3 +437,39 @@ const GEFAEHRLICH = { test: istGefaehrlich };
 function ersetzen(knoten, ...kinder) {
   knoten.replaceChildren(...kinder.flat(Infinity).filter((k) => k !== null && k !== undefined && k !== false && k !== ''));
 }
+
+// Uebersetzter Text mit Bausteinen: Platzhalter {name} werden durch Knoten (oder Texte) aus
+// elemente ersetzt. Ergebnis ist eine Liste fuer el()/ersetzen().
+// Beispiel: tTeile('app.hostkey.erste', { ziel: el('b', null, 'pi@host') })
+function tTeile(schluessel, elemente) {
+  const roh = t(schluessel);
+  const aus = [];
+  let rest = roh;
+  const re = /\{(\w+)\}/;
+  for (let m = re.exec(rest); m; m = re.exec(rest)) {
+    if (m.index) aus.push(rest.slice(0, m.index));
+    const e = elemente && elemente[m[1]];
+    aus.push(e !== undefined && e !== null ? e : m[0]);
+    rest = rest.slice(m.index + m[0].length);
+  }
+  if (rest) aus.push(rest);
+  return aus;
+}
+
+// Sprache wechseln: merken und neu laden (laufende Terminals haengen sich danach wieder an).
+// Aus dem Mehr-Menue heraus baut das Schliessen des Menues gleich danach seinen Verlaufseintrag
+// ab (history.back()); diese Verlaufs-Navigation braeche das Neuladen ab, die Seite bliebe in
+// der alten Sprache. Den Eintrag raeumt nach dem Neuladen der Start dieser Datei ab.
+App.spracheWechseln = function (l) {
+  if (spracheNormal(l) === I18N.sprache) return;
+  spracheSetzen(l, true);
+  seiteLaedtNeu = true;
+  location.reload();
+};
+
+// Umschalter «Deutsch / English» (Einrichten, Anmelden; auch fuer die Einstellungen nutzbar).
+App.sprachUmschalter = function (klasse) {
+  return el('div', { class: 'sprachwahl' + (klasse ? ' ' + klasse : ''), role: 'group', 'aria-label': t('basis.sprache') },
+    SPRACHEN.map((s) => el('button', { type: 'button', lang: s.id, 'aria-pressed': s.id === I18N.sprache ? 'true' : 'false',
+      onclick: () => App.spracheWechseln(s.id) }, s.name)));
+};

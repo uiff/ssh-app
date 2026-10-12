@@ -1,5 +1,6 @@
 'use strict';
 // Zugaenge (Passwort/Schluessel), Snippets und Einstellungen samt Backup.
+// Texte: js/sprache/hosts.js (Schluessel «hosts.»).
 
 function feldMit(id, label, input, hinweis) {
   return el('div', { class: 'feld' }, el('label', { for: id }, label), input, hinweis ? el('div', { class: 'hinweis' }, hinweis) : null);
@@ -10,106 +11,107 @@ function textFeld(id, wert, extra) {
 
 App.zugangBearbeiten = function (z) {
   const neu = !z.id;
-  const name = textFeld('z-name', z.name, { placeholder: 'z.B. admin-schlüssel' });
-  const benutzer = textFeld('z-benutzer', z.benutzer, { placeholder: 'root, pi, admin …' });
-  const passwort = el('input', { id: 'z-pw', type: 'password', autocomplete: 'new-password', placeholder: z.hatPasswort ? 'gespeichert — leer lassen = unverändert' : '' });
+  const name = textFeld('z-name', z.name, { placeholder: t('hosts.zugang.namePlatzhalter') });
+  const benutzer = textFeld('z-benutzer', z.benutzer, { placeholder: t('hosts.feld.benutzerBeispiele') });
+  const passwort = el('input', { id: 'z-pw', type: 'password', autocomplete: 'new-password', placeholder: z.hatPasswort ? t('hosts.zugang.gespeichertLeer') : '' });
   const pwWeg = el('input', { type: 'checkbox' });
-  const schluessel = el('textarea', { id: 'z-key', placeholder: z.oeffentlich ? 'gespeichert — leer lassen = unverändert' : '-----BEGIN OPENSSH PRIVATE KEY-----\n…', spellcheck: 'false' });
-  const passphrase = el('input', { id: 'z-pp', type: 'password', autocomplete: 'off', placeholder: z.hatPassphrase ? 'gespeichert' : 'nur falls der Schlüssel geschützt ist' });
+  const schluessel = el('textarea', { id: 'z-key', placeholder: z.oeffentlich ? t('hosts.zugang.gespeichertLeer') : '-----BEGIN OPENSSH PRIVATE KEY-----\n…', spellcheck: 'false' });
+  const passphrase = el('input', { id: 'z-pp', type: 'password', autocomplete: 'off', placeholder: t(z.hatPassphrase ? 'hosts.zugang.gespeichert' : 'hosts.zugang.passphraseLeer') });
   const keyWeg = el('input', { type: 'checkbox' });
   const dateiWahl = el('input', { type: 'file', class: 'versteckt', onchange: async () => {
     const f = dateiWahl.files[0]; if (!f) return;
-    if (f.size > 64 * 1024) { toast('Datei zu gross für einen Schlüssel', 'fehler'); return; }
+    if (f.size > 64 * 1024) { toast(t('hosts.zugang.dateiZuGross'), 'fehler'); return; }
     schluessel.value = await f.text();
   } });
 
   // Oeffentlicher Schluessel: lange Zeichenketten ohne Trennstelle umbrechen (Telefon).
   const oeffentlich = z.oeffentlich ? el('div', { class: 'feld' },
-    el('span', { class: 'label' }, 'Öffentlicher Schlüssel'),
+    el('span', { class: 'label' }, t('hosts.zugang.oeffentlich')),
     el('div', { class: 'fp', style: { fontSize: '12px' } }, z.oeffentlich),
     el('div', { class: 'hinweis fp-hinweis' }, (z.schluesselTyp || '') + ' · ' + (z.fingerprint || '')),
     el('div', { class: 'reihe', style: { gap: '8px' } },
-      el('button', { class: 'btn klein', type: 'button', onclick: () => kopieren(z.oeffentlich) }, icon('kopieren'), 'Kopieren'),
-      el('button', { class: 'btn klein', type: 'button', onclick: () => schluesselInstallieren(z) }, icon('hoch'), 'Auf einem Host eintragen'),
+      el('button', { class: 'btn klein', type: 'button', onclick: () => kopieren(z.oeffentlich) }, icon('kopieren'), t('hosts.zugang.kopieren')),
+      el('button', { class: 'btn klein', type: 'button', onclick: () => schluesselInstallieren(z) }, icon('hoch'), t('hosts.zugang.eintragen')),
       el('button', { class: 'btn klein', type: 'button', onclick: async () => {
-        if (await frage('Den privaten Schlüssel unverschlüsselt herunterladen? Die Datei gibt Zugang zu allen Hosts mit diesem Schlüssel.', { ja: 'Herunterladen', gefahr: true })) herunterladen('/api/zugaenge/' + z.id + '/privat');
-      } }, icon('runter'), 'Privaten Schlüssel herunterladen'))) : null;
+        if (await frage(t('hosts.zugang.privatFrage'), { ja: t('hosts.zugang.herunterladen'), gefahr: true })) herunterladen('/api/zugaenge/' + z.id + '/privat');
+      } }, icon('runter'), t('hosts.zugang.privatHerunterladen')))) : null;
 
   const speichern = async () => {
     const daten = { name: name.value.trim(), benutzer: benutzer.value.trim(), passwort: passwort.value, passwortEntfernen: pwWeg.checked,
       schluessel: schluessel.value.trim(), schluesselEntfernen: keyWeg.checked, passphrase: passphrase.value };
     try {
       if (neu) await api('POST', '/api/zugaenge', daten); else await api('PUT', '/api/zugaenge/' + z.id, daten);
-      dlg.zu(); await App.datenLaden(); toast('Gespeichert');
+      dlg.zu(); await App.datenLaden(); toast(t('hosts.gespeichert'));
     } catch (e) { fehlerToast(e); }
   };
   const dlg = dialog({
-    titel: neu ? 'Zugang anlegen' : 'Zugang bearbeiten', breit: true,
+    titel: t(neu ? 'hosts.zugang.titelNeu' : 'hosts.zugang.titelBearbeiten'), breit: true,
     inhalt: el('form', { onsubmit: (e) => { e.preventDefault(); speichern(); }, style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
-      el('div', { class: 'raster2' }, feldMit('z-name', 'Name', name), feldMit('z-benutzer', 'Benutzer', benutzer)),
+      el('div', { class: 'raster2' }, feldMit('z-name', t('hosts.feld.name'), name), feldMit('z-benutzer', t('hosts.feld.benutzer'), benutzer)),
       oeffentlich,
-      feldMit('z-pw', 'Passwort', passwort, z.hatPasswort
-        ? el('label', { class: 'check', style: { padding: '0' } }, pwWeg, 'Gespeichertes Passwort entfernen')
-        : 'Für die Anmeldung mit Passwort. Bei einem Schlüssel leer lassen.'),
+      feldMit('z-pw', t('hosts.feld.passwort'), passwort, z.hatPasswort
+        ? el('label', { class: 'check', style: { padding: '0' } }, pwWeg, t('hosts.zugang.pwEntfernen'))
+        : t('hosts.zugang.pwHinweis')),
       el('div', { class: 'feld' },
-        el('div', { class: 'reihe', style: { justifyContent: 'space-between' } }, el('label', { for: 'z-key', style: { fontSize: '13px', color: 'var(--text2)' } }, 'Privater Schlüssel'),
-          el('button', { class: 'btn klein', type: 'button', onclick: () => dateiWahl.click() }, icon('ordner'), 'Aus Datei laden')),
+        el('div', { class: 'reihe', style: { justifyContent: 'space-between', flexWrap: 'wrap', gap: '4px 8px' } }, el('label', { for: 'z-key', style: { fontSize: '13px', color: 'var(--text2)' } }, t('hosts.zugang.privat')),
+          el('button', { class: 'btn klein', type: 'button', onclick: () => dateiWahl.click() }, icon('ordner'), t('hosts.zugang.ausDatei'))),
         schluessel, dateiWahl,
-        z.oeffentlich ? el('label', { class: 'check', style: { padding: '0' } }, keyWeg, 'Gespeicherten Schlüssel entfernen') : null),
-      feldMit('z-pp', 'Passphrase des Schlüssels', passphrase),
+        z.oeffentlich ? el('label', { class: 'check', style: { padding: '0' } }, keyWeg, t('hosts.zugang.keyEntfernen')) : null),
+      feldMit('z-pp', t('hosts.zugang.passphrase'), passphrase),
       el('button', { type: 'submit', class: 'versteckt' })),
     knoepfe: [
       !neu ? el('button', { class: 'btn gefahr links', type: 'button', onclick: async () => {
-        const text = z.hosts ? `Zugang «${z.name}» löschen? ${z.hosts} Host(s) fragen danach beim Verbinden nach dem Passwort.` : `Zugang «${z.name}» löschen?`;
-        if (!(await frage(text, { ja: 'Löschen', gefahr: true }))) return;
+        const n = z.hosts || 0;
+        const text = t(n === 0 ? 'hosts.zugang.loeschenFrage' : n === 1 ? 'hosts.zugang.loeschenFrageHost' : 'hosts.zugang.loeschenFrageHosts', { name: z.name, n });
+        if (!(await frage(text, { ja: t('hosts.knopf.loeschen'), gefahr: true }))) return;
         try { await api('DELETE', '/api/zugaenge/' + z.id); dlg.zu(); App.datenLaden(); } catch (e) { fehlerToast(e); }
-      } }, icon('muell'), 'Löschen') : null,
+      } }, icon('muell'), t('hosts.knopf.loeschen')) : null,
       // Telefon: ohne «Abbrechen» (Kreuz oben, Zurueck-Geste), damit der Fuss einzeilig bleibt.
-      el('button', { class: 'btn nur-desktop', type: 'button', onclick: () => dlg.zu() }, 'Abbrechen'),
-      el('button', { class: 'btn primaer', type: 'button', onclick: speichern }, 'Speichern'),
+      el('button', { class: 'btn nur-desktop', type: 'button', onclick: () => dlg.zu() }, t('hosts.knopf.abbrechen')),
+      el('button', { class: 'btn primaer', type: 'button', onclick: speichern }, t('hosts.knopf.speichern')),
     ],
   });
   dlg.element.classList.add('zugang-dialog');
 };
 
 App.schluesselErzeugen = function () {
-  const name = textFeld('k-name', '', { placeholder: 'z.B. handy-2026' });
-  const benutzer = textFeld('k-benutzer', '', { placeholder: 'root, pi, admin …' });
+  const name = textFeld('k-name', '', { placeholder: t('hosts.schluessel.namePlatzhalter') });
+  const benutzer = textFeld('k-benutzer', '', { placeholder: t('hosts.feld.benutzerBeispiele') });
   const los = async () => {
-    if (!name.value.trim()) { toast('Bitte einen Namen angeben', 'fehler'); return; }
+    if (!name.value.trim()) { toast(t('hosts.schluessel.nameFehlt'), 'fehler'); return; }
     try {
       const z = await api('POST', '/api/zugaenge/erzeugen', { name: name.value.trim(), benutzer: benutzer.value.trim() });
       dlg.zu(); await App.datenLaden();
       App.zugangBearbeiten(Object.assign({ hosts: 0 }, z));
-      toast('Schlüssel erzeugt — jetzt auf einem Host eintragen');
+      toast(t('hosts.schluessel.erzeugt'));
     } catch (e) { fehlerToast(e); }
   };
   const dlg = dialog({
-    titel: 'Neuen Schlüssel erzeugen',
+    titel: t('hosts.schluessel.titel'),
     inhalt: el('form', { onsubmit: (e) => { e.preventDefault(); los(); }, style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
-      el('p', { style: { margin: 0, color: 'var(--text2)', lineHeight: 1.5 } }, 'Erzeugt ein ed25519-Schlüsselpaar. Der private Teil bleibt verschlüsselt im Tresor.'),
-      feldMit('k-name', 'Name', name), feldMit('k-benutzer', 'Benutzer', benutzer), el('button', { type: 'submit', class: 'versteckt' })),
-    knoepfe: [el('button', { class: 'btn', type: 'button', onclick: () => dlg.zu() }, 'Abbrechen'), el('button', { class: 'btn primaer', type: 'button', onclick: los }, icon('schluessel'), 'Erzeugen')],
+      el('p', { style: { margin: 0, color: 'var(--text2)', lineHeight: 1.5 } }, t('hosts.schluessel.text')),
+      feldMit('k-name', t('hosts.feld.name'), name), feldMit('k-benutzer', t('hosts.feld.benutzer'), benutzer), el('button', { type: 'submit', class: 'versteckt' })),
+    knoepfe: [el('button', { class: 'btn', type: 'button', onclick: () => dlg.zu() }, t('hosts.knopf.abbrechen')), el('button', { class: 'btn primaer', type: 'button', onclick: los }, icon('schluessel'), t('hosts.schluessel.erzeugen'))],
   });
 };
 
 function schluesselInstallieren(z) {
   const hosts = App.daten.hosts;
-  if (!hosts.length) { toast('Zuerst einen Host anlegen', 'fehler'); return; }
+  if (!hosts.length) { toast(t('hosts.installieren.keinHost'), 'fehler'); return; }
   const wahl = el('select', { id: 'i-host' }, hosts.map((h) => el('option', { value: h.id }, h.name + ' (' + h.adresse + ')')));
-  const pw = el('input', { id: 'i-pw', type: 'password', autocomplete: 'off', placeholder: 'nur wenn der Host keinen Zugang hat' });
+  const pw = el('input', { id: 'i-pw', type: 'password', autocomplete: 'off', placeholder: t('hosts.installieren.pwPlatzhalter') });
   const los = async () => {
     try {
       await api('POST', '/api/zugaenge/' + z.id + '/installieren', { hostId: +wahl.value, passwort: pw.value });
-      dlg.zu(); toast('Schlüssel eingetragen');
+      dlg.zu(); toast(t('hosts.installieren.fertig'));
     } catch (e) { fehlerToast(e); }
   };
   const dlg = dialog({
-    titel: 'Schlüssel auf Host eintragen',
+    titel: t('hosts.installieren.titel'),
     inhalt: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
-      el('p', { style: { margin: 0, color: 'var(--text2)', lineHeight: 1.5 } }, 'Hängt den öffentlichen Schlüssel an ~/.ssh/authorized_keys an. Angemeldet wird mit dem bisherigen Zugang des Hosts. Den Host vorher einmal im Terminal verbinden, damit sein Host-Schlüssel bekannt ist.'),
-      feldMit('i-host', 'Host', wahl), feldMit('i-pw', 'Passwort (optional)', pw)),
-    knoepfe: [el('button', { class: 'btn', type: 'button', onclick: () => dlg.zu() }, 'Abbrechen'), el('button', { class: 'btn primaer', type: 'button', onclick: los }, 'Eintragen')],
+      el('p', { style: { margin: 0, color: 'var(--text2)', lineHeight: 1.5 } }, t('hosts.installieren.text')),
+      feldMit('i-host', t('hosts.installieren.host'), wahl), feldMit('i-pw', t('hosts.installieren.pw'), pw)),
+    knoepfe: [el('button', { class: 'btn', type: 'button', onclick: () => dlg.zu() }, t('hosts.knopf.abbrechen')), el('button', { class: 'btn primaer', type: 'button', onclick: los }, t('hosts.installieren.eintragen'))],
   });
 }
 
@@ -124,22 +126,22 @@ App.snippetBearbeiten = function (s) {
     const d = { name: name.value.trim(), befehl: befehl.value, beschreibung: beschr.value.trim() };
     try {
       if (neu) await api('POST', '/api/snippets', d); else await api('PUT', '/api/snippets/' + s.id, d);
-      dlg.zu(); await App.datenLaden(); toast('Snippet gespeichert');
+      dlg.zu(); await App.datenLaden(); toast(t('hosts.snippet.gespeichert'));
     } catch (e) { fehlerToast(e); }
   };
   const dlg = dialog({
-    titel: neu ? 'Snippet anlegen' : 'Snippet bearbeiten',
+    titel: t(neu ? 'hosts.snippet.titelNeu' : 'hosts.snippet.titelBearbeiten'),
     inhalt: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
-      feldMit('s-name', 'Name', name),
-      feldMit('s-befehl', 'Befehl', befehl, 'Platzhalter in doppelten geschweiften Klammern: {{dienst}}. Beim Einfügen fragt die App danach.'),
-      feldMit('s-beschr', 'Beschreibung (optional)', beschr)),
+      feldMit('s-name', t('hosts.feld.name'), name),
+      feldMit('s-befehl', t('hosts.snippet.befehl'), befehl, t('hosts.snippet.befehlHinweis', { beispiel: '{{' + t('hosts.snippet.platzhalterName') + '}}' })),
+      feldMit('s-beschr', t('hosts.snippet.beschreibung'), beschr)),
     knoepfe: [
       !neu ? el('button', { class: 'btn gefahr links', type: 'button', onclick: async () => {
-        if (!(await frage(`Snippet «${s.name}» löschen?`, { ja: 'Löschen', gefahr: true }))) return;
+        if (!(await frage(t('hosts.snippet.loeschenFrage', { name: s.name }), { ja: t('hosts.knopf.loeschen'), gefahr: true }))) return;
         try { await api('DELETE', '/api/snippets/' + s.id); dlg.zu(); App.datenLaden(); } catch (e) { fehlerToast(e); }
-      } }, icon('muell'), 'Löschen') : null,
-      el('button', { class: 'btn', type: 'button', onclick: () => dlg.zu() }, 'Abbrechen'),
-      el('button', { class: 'btn primaer', type: 'button', onclick: speichern }, 'Speichern'),
+      } }, icon('muell'), t('hosts.knopf.loeschen')) : null,
+      el('button', { class: 'btn', type: 'button', onclick: () => dlg.zu() }, t('hosts.knopf.abbrechen')),
+      el('button', { class: 'btn primaer', type: 'button', onclick: speichern }, t('hosts.knopf.speichern')),
     ],
   });
 };
@@ -153,78 +155,91 @@ App.einstellungen = function () {
   const neu2 = el('input', { id: 'e-neu2', type: 'password', autocomplete: 'new-password' });
   const schrift = el('input', { id: 'e-schrift', type: 'number', min: 9, max: 24, value: App.schriftGroesse(), inputmode: 'numeric',
     onchange: () => App.schriftSetzen(parseInt(schrift.value, 10)) });
+  // Sprache: Wechsel laedt die Seite neu; offene Terminals haengen sich danach von selbst wieder an.
+  // Der Name jeder Sprache steht in ihr selbst (lang-Attribut fuer Screenreader).
+  const sprachen = el('div', { class: 'sprachen', role: 'group', 'aria-labelledby': 'e-sprache-label' },
+    SPRACHEN.map((l) => el('button', { type: 'button', class: 'sprach-knopf', lang: l.id, 'aria-pressed': l.id === I18N.sprache ? 'true' : 'false',
+      onclick: () => App.spracheWechseln(l.id) }, el('span', { class: 'sprach-kuerzel', 'aria-hidden': 'true' }, l.id.toUpperCase()), l.name)));
   // Akzentfarbe: runde Farbpunkte mit Namen, sofort wirksam und je Browser gemerkt.
   const akzente = el('div', { class: 'akzente', role: 'group', 'aria-labelledby': 'e-akzent-label' });
   let akzent = akzentFuer(akzentGemerkt()).id;
   const akzenteZeichnen = () => {
     ersetzen(akzente, AKZENTE.map((a) => el('button', { type: 'button', class: 'akzent-knopf', 'aria-pressed': a.id === akzent ? 'true' : 'false',
       onclick: () => { akzent = akzentSetzen(a.id, true).id; akzenteZeichnen(); } },
-    el('span', { class: 'farbpunkt', style: { background: a.farbe } }), a.de)));
+    el('span', { class: 'farbpunkt', style: { background: a.farbe } }), a[I18N.sprache] || a.de)));
   };
   akzenteZeichnen();
   const bekannt = el('div', { style: { display: 'flex', flexDirection: 'column' } });
   const bekanntZeichnen = () => ersetzen(bekannt, ...(App.daten.bekannt.length ? App.daten.bekannt.map((b) => el('div', { class: 'zeile-wrap', style: { borderBottom: '1px solid var(--linie)' } },
     el('div', { class: 'zeile', style: { cursor: 'default' } }, el('span', { class: 'haupt' }, el('b', { class: 'mono', style: { fontSize: '13px' } }, b.ziel), el('small', null, b.typ + ' · ' + b.fingerprint))),
-    ikonKnopf('muell', 'Vergessen', async () => {
-      if (!(await frage(`Host-Schlüssel von ${b.ziel} vergessen? Beim nächsten Verbinden fragt die App erneut.`, { ja: 'Vergessen', gefahr: true }))) return;
+    ikonKnopf('muell', t('hosts.einst.vergessenLabel', { ziel: b.ziel }), async () => {
+      if (!(await frage(t('hosts.einst.vergessenFrage', { ziel: b.ziel }), { ja: t('hosts.einst.vergessen'), gefahr: true }))) return;
       try { await api('DELETE', '/api/bekannt/' + encodeURIComponent(b.ziel)); await App.datenLaden(); bekanntZeichnen(); } catch (e) { fehlerToast(e); }
-    }))) : [el('p', { style: { margin: 0, color: 'var(--leise)' } }, 'Noch keine.')]));
+    }))) : [el('p', { style: { margin: 0, color: 'var(--leise)' } }, t('hosts.einst.keine'))]));
   bekanntZeichnen();
 
   dialog({
-    titel: 'Einstellungen', breit: true,
+    titel: t('hosts.einst.titel'), breit: true,
     inhalt: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '18px' } },
       el('div', { class: 'einstellungen-gruppe' },
-        el('h4', null, 'Darstellung'),
-        el('div', { class: 'feld' }, el('span', { class: 'label', id: 'e-akzent-label' }, 'Akzentfarbe'), akzente),
-        el('div', { class: 'schrift-feld' }, feldMit('e-schrift', 'Schriftgrösse im Terminal (px)', schrift))),
+        el('h4', null, t('hosts.einst.darstellung')),
+        el('div', { class: 'feld' }, el('span', { class: 'label', id: 'e-sprache-label' }, t('hosts.einst.sprache')), sprachen,
+          el('div', { class: 'hinweis' }, t('hosts.einst.spracheHinweis'))),
+        el('div', { class: 'feld' }, el('span', { class: 'label', id: 'e-akzent-label' }, t('hosts.einst.akzent')), akzente),
+        el('div', { class: 'schrift-feld' }, feldMit('e-schrift', t('hosts.einst.schrift'), schrift))),
       el('div', { class: 'einstellungen-gruppe' },
-        el('h4', null, 'Backup'),
-        el('p', null, 'Die Backup-Datei enthält Hosts, Ordner, Zugänge, Snippets und bekannte Host-Schlüssel — alles verschlüsselt. Einspielen geht nur mit dem Sicherheitsschlüssel, auf diesem oder einem anderen System.'),
-        el('div', { class: 'reihe' },
-          el('button', { class: 'btn primaer', type: 'button', onclick: () => herunterladen('/api/sicherung') }, icon('runter'), 'Backup herunterladen'),
-          el('button', { class: 'btn', type: 'button', onclick: () => App.backupEinspielen(true) }, icon('hoch'), 'Backup einspielen'))),
+        el('h4', null, t('hosts.einst.backup')),
+        el('p', null, t('hosts.einst.backupText')),
+        el('div', { class: 'reihe einst-knoepfe' },
+          el('button', { class: 'btn primaer', type: 'button', onclick: () => herunterladen('/api/sicherung') }, icon('runter'), t('hosts.einst.backupLaden')),
+          el('button', { class: 'btn', type: 'button', onclick: () => App.backupEinspielen(true) }, icon('hoch'), t('hosts.einst.backupEinspielen')))),
       el('div', { class: 'einstellungen-gruppe' },
-        el('h4', null, 'Passwort ändern'),
-        el('p', null, 'Angemeldet als ', el('b', null, st.benutzer || ''), '. Der Sicherheitsschlüssel bleibt gültig.'),
-        el('div', { class: 'raster2' }, feldMit('e-alt', 'Bisheriges Passwort', alt), el('div'), feldMit('e-neu', 'Neues Passwort', neu1, 'Mindestens ' + st.minPasswort + ' Zeichen'), feldMit('e-neu2', 'Neues Passwort wiederholen', neu2)),
+        el('h4', null, t('hosts.einst.pwAendern')),
+        el('p', null, tTeile('hosts.einst.angemeldetAls', { benutzer: el('b', null, st.benutzer || '') })),
+        el('div', { class: 'raster2' }, feldMit('e-alt', t('hosts.einst.pwAlt'), alt), el('div', { class: 'nur-desktop' }), feldMit('e-neu', t('hosts.einst.pwNeu'), neu1, t('hosts.einst.pwMin', { n: st.minPasswort })), feldMit('e-neu2', t('hosts.einst.pwNeu2'), neu2)),
         el('div', null, el('button', { class: 'btn', type: 'button', onclick: async () => {
-          if (neu1.value !== neu2.value) { toast('Die neuen Passwörter stimmen nicht überein', 'fehler'); return; }
-          try { await api('POST', '/api/passwort', { alt: alt.value, neu: neu1.value }); alt.value = neu1.value = neu2.value = ''; toast('Passwort geändert'); } catch (e) { fehlerToast(e); }
-        } }, 'Passwort ändern'))),
+          if (neu1.value !== neu2.value) { toast(t('hosts.einst.pwUngleich'), 'fehler'); return; }
+          try { await api('POST', '/api/passwort', { alt: alt.value, neu: neu1.value }); alt.value = neu1.value = neu2.value = ''; toast(t('hosts.einst.pwGeaendert')); } catch (e) { fehlerToast(e); }
+        } }, t('hosts.einst.pwAendern')))),
       el('div', { class: 'einstellungen-gruppe' },
-        el('h4', null, 'Bekannte Host-Schlüssel'),
-        el('p', null, 'Beim ersten Verbinden bestätigt. Ändert sich ein Schlüssel, warnt die App vor dem Verbinden.'),
+        el('h4', null, t('hosts.einst.bekannt')),
+        el('p', null, t('hosts.einst.bekanntText')),
         bekannt),
       el('div', { class: 'einstellungen-gruppe' },
-        el('h4', null, 'Über'),
-        el('p', null, 'SSH-App ', st.version, ' · Erstellt von ', el('a', { href: 'https://iotueli.ch', target: '_blank', rel: 'noopener' }, 'IoTUeli')),
-        el('p', null, 'Verwendet xterm.js (MIT), IBM Plex Sans und JetBrains Mono (OFL) sowie Go-Bibliotheken (BSD, ISC, MIT). Befehlshilfe: ', tldrQuelle(false), '.'),
-        el('div', null, el('a', { class: 'btn klein', href: 'vendor/licenses/', target: '_blank', rel: 'noopener' }, 'Lizenzen')))),
+        el('h4', null, t('hosts.einst.ueber')),
+        el('p', null, tTeile('hosts.einst.version', { version: st.version || '', hersteller: el('a', { href: 'https://iotueli.ch', target: '_blank', rel: 'noopener' }, 'IoTUeli') })),
+        el('p', null, tTeile('hosts.einst.verwendet', { quelle: tldrQuelle(false, true) })),
+        el('div', null, el('a', { class: 'btn klein', href: 'vendor/licenses/', target: '_blank', rel: 'noopener' }, t('hosts.einst.lizenzen'))))),
   });
 };
 
 App.backupEinspielen = function (angemeldet) {
-  const datei = el('input', { id: 'b-datei', type: 'file', accept: '.json,application/json' });
+  // Eigener Knopf statt des Browser-Felds: dessen Beschriftung folgt der Browser-Sprache, nicht der App.
+  const dateiName = el('span', { class: 'datei-name' }, t('hosts.backup.keineDatei'));
+  const datei = el('input', { type: 'file', class: 'versteckt', accept: '.json,application/json', tabindex: '-1', 'aria-hidden': 'true',
+    onchange: () => { dateiName.textContent = datei.files[0] ? datei.files[0].name : t('hosts.backup.keineDatei'); } });
+  const dateiWahl = el('div', { class: 'datei-wahl' },
+    el('button', { id: 'b-datei', class: 'btn', type: 'button', onclick: () => datei.click() }, icon('datei'), t('hosts.backup.dateiWaehlen')),
+    dateiName, datei);
   const schluessel = el('textarea', { id: 'b-key', spellcheck: 'false', autocapitalize: 'characters', style: { minHeight: '80px' }, placeholder: 'ABCD-EFGH-…' });
   const los = async () => {
-    if (!datei.files[0]) { toast('Bitte die Backup-Datei wählen', 'fehler'); return; }
-    if (angemeldet && !(await frage('Alle Hosts, Zugänge und Snippets auf diesem System werden durch das Backup ersetzt. Danach meldest du dich mit Benutzer und Passwort des gesicherten Systems an.', { titel: 'Backup einspielen', ja: 'Ersetzen', gefahr: true }))) return;
+    if (!datei.files[0]) { toast(t('hosts.backup.dateiFehlt'), 'fehler'); return; }
+    if (angemeldet && !(await frage(t('hosts.backup.frage'), { titel: t('hosts.backup.titel'), ja: t('hosts.backup.ersetzen'), gefahr: true }))) return;
     const fd = new FormData();
     fd.append('datei', datei.files[0]);
     fd.append('schluessel', schluessel.value);
     try {
       const r = await api('POST', angemeldet ? '/api/sicherung' : '/api/einspielen', fd);
       dlg.zu();
-      toast(`Backup eingespielt (${r.hosts} Hosts). Bitte als «${r.benutzer}» anmelden.`);
+      toast(t('hosts.backup.fertig', { hosts: hostsAnzahl(r.hosts || 0), benutzer: r.benutzer }));
       App.starten();
     } catch (e) { fehlerToast(e); }
   };
   const dlg = dialog({
-    titel: 'Backup einspielen',
+    titel: t('hosts.backup.titel'),
     inhalt: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '16px' } },
-      feldMit('b-datei', 'Backup-Datei', datei),
-      feldMit('b-key', 'Sicherheitsschlüssel', schluessel, 'Der Schlüssel, der bei der Einrichtung des gesicherten Systems angezeigt wurde. Gross-/Kleinschreibung und Leerzeichen sind egal.')),
-    knoepfe: [el('button', { class: 'btn', type: 'button', onclick: () => dlg.zu() }, 'Abbrechen'), el('button', { class: 'btn primaer', type: 'button', onclick: los }, icon('hoch'), 'Einspielen')],
+      feldMit('b-datei', t('hosts.backup.datei'), dateiWahl),
+      feldMit('b-key', t('hosts.backup.schluessel'), schluessel, t('hosts.backup.schluesselHinweis'))),
+    knoepfe: [el('button', { class: 'btn', type: 'button', onclick: () => dlg.zu() }, t('hosts.knopf.abbrechen')), el('button', { class: 'btn primaer', type: 'button', onclick: los }, icon('hoch'), t('hosts.backup.einspielen'))],
   });
 };

@@ -20,6 +20,8 @@ import (
 
 	"github.com/pkg/sftp"
 	"golang.org/x/crypto/ssh"
+
+	"github.com/uiff/ssh-app/internal/texte"
 )
 
 const (
@@ -38,6 +40,10 @@ const (
 	sftpPause = time.Minute
 )
 
+// abbruchFrist: So lange wartet Beenden auf einen laufenden Schreibvorgang an den
+// Browser, bevor es ihn abbricht (Empfaenger.Abbrechen). Variable fuer Tests.
+var abbruchFrist = 2 * time.Second
+
 // pidMarke wird vom Startbefehl ausgegeben und aus dem Datenstrom entfernt.
 var pidMarke = regexp.MustCompile(`\x1b\]7770;pid=(\d+)\x07`)
 
@@ -55,11 +61,27 @@ var osc7 = regexp.MustCompile(`\x1b\]7;file://[^/\x07\x1b]*(/[^\x07\x1b]*)(?:\x0
 // faellt Starten auf eine normale Shell zurueck.
 const StartBefehl = `exec /bin/sh -c 'printf "\033]7770;pid=%s\007" "$$"; exec "${SHELL:-/bin/sh}" -l'`
 
-// ErrAbgeloest: ein anderer Browser hat die Sitzung uebernommen.
-var ErrAbgeloest = errors.New("Die Sitzung ist in einem anderen Fenster geöffnet")
+// Fehler fuer den Anwender (texte.Meldung, Vergleich mit errors.Is).
+var (
+	// ErrAbgeloest: ein anderer Browser hat die Sitzung uebernommen.
+	ErrAbgeloest error = texte.Neu("term.abgeloest")
+	// ErrKeinSFTP: der Server bietet (gerade) kein SFTP an.
+	ErrKeinSFTP error = texte.Neu("term.kein.sftp")
+	// ErrBeendet: die Sitzung ist zu Ende.
+	ErrBeendet error = texte.Neu("term.beendet")
+)
 
-// ErrKeinSFTP: der Server bietet (gerade) kein SFTP an.
-var ErrKeinSFTP = errors.New("Der Server bietet kein SFTP an")
+// Gruende fuer das Ende einer Sitzung (Sitzung.Beenden).
+var (
+	GrundGeschlossen = texte.Neu("term.ende.geschlossen")
+	GrundHerunter    = texte.Neu("term.ende.herunterfahren")
+	GrundOhneBrowser = texte.Neu("term.ende.ohne.browser")
+	GrundVerbindung  = texte.Neu("term.ende.verbindung")
+	GrundAbgemeldet  = texte.Neu("term.ende.abgemeldet")
+)
+
+// GrundShell: die Shell endete mit einem Code.
+func GrundShell(code int) *texte.Meldung { return texte.Neu("term.ende.shell", code) }
 
 type Info struct {
 	ID          string    `json:"id"`
@@ -78,9 +100,12 @@ type Empfaenger struct {
 	// Daten liefert neue Ausgabe; false = Browser nicht mehr erreichbar.
 	Daten func([]byte) bool
 	// Ende meldet, dass die Sitzung zu Ende ist (nach der letzten Ausgabe).
-	Ende func(grund string)
+	Ende func(grund *texte.Meldung)
 	// Abgeloest meldet, dass ein anderer Browser die Sitzung uebernommen hat.
 	Abgeloest func()
+	// Abbrechen (optional) bricht einen haengenden Daten-Aufruf sofort ab. Beenden ruft
+	// es, wenn ein Schreibvorgang laenger als abbruchFrist dauert (Browser liest nicht).
+	Abbrechen func()
 }
 
 // Anhang ist die Verbindung eines Browsers mit einer Sitzung. Live-Ausgabe fliesst
@@ -110,7 +135,7 @@ type Sitzung struct {
 	losSeit   time.Time
 	endeSeit  time.Time
 	beendet   bool
-	grund     string
+	grund     *texte.Meldung
 	pid       int
 	cwd       string
 	rest      []byte
@@ -165,7 +190,7 @@ func (m *Manager) Close() {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s.Beenden("Server fährt herunter")
+			s.Beenden(GrundHerunter)
 		}()
 	}
 	wg.Wait()
@@ -206,7 +231,7 @@ func (m *Manager) raeumen(jetzt time.Time) {
 		case beendet && los && alt > BeendetMax:
 			delete(m.sitzung, id)
 		case !beendet && los && alt > LosgeloestMax:
-			go s.Beenden("zu lange ohne Browser")
+			go s.Beenden(GrundOhneBrowser)
 		}
 	}
 }
@@ -232,23 +257,25 @@ func terminalOeffnen(c *ssh.Client, spalten, zeilen int, befehl string) (*kanal,
 	sess, err := c.NewSession()
 	if err != nil {
 		log.Printf("Terminal: Sitzung öffnen: %v", err)
-		return nil, errors.New("Das Gerät öffnet keine weitere Sitzung (zu viele offene Kanäle?)")
+		return nil, texte.Neu("term.kanal.voll").MitUrsache(err)
 	}
 	modes := ssh.TerminalModes{ssh.ECHO: 1, ssh.TTY_OP_ISPEED: 115200, ssh.TTY_OP_OSPEED: 115200}
 	if err := sess.RequestPty("xterm-256color", zeilen, spalten, modes); err != nil {
 		sess.Close()
 		log.Printf("Terminal: PTY anfordern: %v", err)
-		return nil, errors.New("Das Gerät stellt kein Terminal (PTY) bereit")
+		return nil, texte.Neu("term.kein.pty").MitUrsache(err)
 	}
 	stdin, err := sess.StdinPipe()
 	if err != nil {
 		sess.Close()
-		return nil, err
+		log.Printf("Terminal: Eingabe öffnen: %v", err)
+		return nil, texte.Neu("term.kanal.fehler").MitUrsache(err)
 	}
 	stdout, err := sess.StdoutPipe()
 	if err != nil {
 		sess.Close()
-		return nil, err
+		log.Printf("Terminal: Ausgabe öffnen: %v", err)
+		return nil, texte.Neu("term.kanal.fehler").MitUrsache(err)
 	}
 	sess.Stderr = nil
 	if befehl != "" {
@@ -260,9 +287,9 @@ func terminalOeffnen(c *ssh.Client, spalten, zeilen int, befehl string) (*kanal,
 		sess.Close()
 		log.Printf("Terminal: Start: %v", err)
 		if befehl != "" {
-			return nil, errors.New("Das Gerät führt keinen Startbefehl aus")
+			return nil, texte.Neu("term.kein.startbefehl").MitUrsache(err)
 		}
-		return nil, errors.New("Das Gerät startet keine Shell")
+		return nil, texte.Neu("term.keine.shell").MitUrsache(err)
 	}
 	k := &kanal{sess: sess, stdin: stdin, daten: make(chan []byte, 16)}
 	go func() {
@@ -358,12 +385,12 @@ func (m *Manager) Starten(p Start) (*Sitzung, error) {
 		case <-gelesen:
 		case <-time.After(time.Second):
 		}
-		grund := "Verbindung beendet"
+		grund := GrundVerbindung
 		var ee *ssh.ExitError
 		if errors.As(err, &ee) {
-			grund = "Shell beendet (Code " + strconv.Itoa(ee.ExitStatus()) + ")"
+			grund = GrundShell(ee.ExitStatus())
 		} else if err == nil {
-			grund = "Abgemeldet"
+			grund = GrundAbgemeldet
 		}
 		s.Beenden(grund)
 	}()
@@ -390,15 +417,16 @@ func (m *Manager) Entfernen(id string) {
 	delete(m.sitzung, id)
 	m.mu.Unlock()
 	if s != nil {
-		s.Beenden("geschlossen")
+		s.Beenden(GrundGeschlossen)
 	}
 }
 
-func (m *Manager) Liste() []Info {
+// Liste liefert alle Sitzungen; Gruende in der Sprache sprache.
+func (m *Manager) Liste(sprache string) []Info {
 	m.mu.Lock()
 	out := make([]Info, 0, len(m.sitzung))
 	for _, s := range m.sitzung {
-		out = append(out, s.Info())
+		out = append(out, s.Info(sprache))
 	}
 	m.mu.Unlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].Gestartet.Before(out[j].Gestartet) })
@@ -408,11 +436,16 @@ func (m *Manager) Liste() []Info {
 func (s *Sitzung) ID() string          { return s.id }
 func (s *Sitzung) Client() *ssh.Client { return s.client }
 
-func (s *Sitzung) Info() Info {
+// Info beschreibt die Sitzung; den Grund des Endes in der Sprache sprache.
+func (s *Sitzung) Info(sprache string) Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return Info{ID: s.id, HostID: s.hostID, Titel: s.titel, Gestartet: s.gestartet, Angehaengt: s.anhang != nil,
-		Beendet: s.beendet, Grund: s.grund, Fingerprint: s.fingerprint}
+	i := Info{ID: s.id, HostID: s.hostID, Titel: s.titel, Gestartet: s.gestartet, Angehaengt: s.anhang != nil,
+		Beendet: s.beendet, Fingerprint: s.fingerprint}
+	if s.grund != nil {
+		i.Grund = s.grund.Text(sprache)
+	}
+	return i
 }
 
 // offeneOSC liefert den Beginn einer angefangenen OSC-Sequenz («ESC ]») am Ende, die
@@ -507,7 +540,7 @@ func (s *Sitzung) ausgeben(chunk []byte, alles bool) {
 // Anhaengen setzt den Empfaenger und liefert den bisherigen Puffer zum Nachzeichnen.
 // Ein vorher angehaengter Browser wird abgeloest (Abgeloest-Rueckruf). Live-Ausgabe
 // fliesst erst nach Anhang.Freigeben; Anhang.Loesen haengt wieder ab.
-func (s *Sitzung) Anhaengen(e Empfaenger) (a *Anhang, puffer []byte, beendet bool, grund string) {
+func (s *Sitzung) Anhaengen(e Empfaenger) (a *Anhang, puffer []byte, beendet bool, grund *texte.Meldung) {
 	a = &Anhang{s: s, e: e, frei: make(chan struct{})}
 	s.mu.Lock()
 	alt := s.anhang
@@ -570,7 +603,7 @@ func (s *Sitzung) Eingabe(b []byte) error {
 	beendet := s.beendet
 	s.mu.Unlock()
 	if beendet {
-		return errors.New("Sitzung ist beendet")
+		return ErrBeendet
 	}
 	_, err := s.stdin.Write(b)
 	return err
@@ -584,13 +617,17 @@ func (s *Sitzung) Groesse(spalten, zeilen int) error {
 }
 
 // Beendet meldet, ob und warum die Sitzung zu Ende ist.
-func (s *Sitzung) Beendet() (bool, string) {
+func (s *Sitzung) Beendet() (bool, *texte.Meldung) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.beendet, s.grund
 }
 
-func (s *Sitzung) Beenden(grund string) {
+// Beenden schliesst die Sitzung und meldet dem angehaengten Browser grund. Haengt
+// ein Schreibvorgang an einen Browser, der nicht mehr liest, wird er nach abbruchFrist
+// abgebrochen: Beenden (und damit «Sitzung schliessen» oder das Herunterfahren) wartet
+// nicht bis zu dessen Schreibfrist.
+func (s *Sitzung) Beenden(grund *texte.Meldung) {
 	s.mu.Lock()
 	if s.beendet {
 		s.mu.Unlock()
@@ -617,6 +654,8 @@ func (s *Sitzung) Beenden(grund string) {
 	if s.schliessen != nil {
 		s.schliessen()
 	}
+	abbruch := time.AfterFunc(abbruchFrist, s.schreibenAbbrechen)
+	defer abbruch.Stop()
 	// Zurueckgehaltenen Rest noch ausgeben, dann das Ende melden.
 	s.ausgeben(nil, true)
 	s.mu.Lock()
@@ -628,13 +667,31 @@ func (s *Sitzung) Beenden(grund string) {
 	}
 }
 
+// schreibenAbbrechen bricht einen haengenden Schreibvorgang an den angehaengten Browser ab.
+func (s *Sitzung) schreibenAbbrechen() {
+	s.mu.Lock()
+	a := s.anhang
+	s.mu.Unlock()
+	if a != nil && a.e.Abbrechen != nil {
+		log.Printf("Sitzung %s: Browser liest nicht mehr — Schreiben abgebrochen", kurzID(s.id))
+		a.e.Abbrechen()
+	}
+}
+
+func kurzID(id string) string {
+	if len(id) > 6 {
+		return id[:6]
+	}
+	return id
+}
+
 // SFTP liefert (und oeffnet bei Bedarf) den SFTP-Kanal der Sitzung. Bietet der
 // Server kein SFTP an, wird eine Minute lang nicht neu versucht.
 func (s *Sitzung) SFTP() (*sftp.Client, error) {
 	s.sftpMu.Lock()
 	defer s.sftpMu.Unlock()
 	if b, _ := s.Beendet(); b {
-		return nil, errors.New("Sitzung ist beendet")
+		return nil, ErrBeendet
 	}
 	if s.sftpC != nil {
 		return s.sftpC, nil

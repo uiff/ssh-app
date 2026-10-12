@@ -1,6 +1,6 @@
 // Package sshx baut SSH-Verbindungen auf: Anmeldung mit Passwort oder
-// Schluessel, Jump-Host, und Pruefung des Host-Schluessels ueber einen
-// Rueckruf, der den Benutzer fragen kann.
+// Schluessel und Pruefung des Host-Schluessels ueber einen Rueckruf, der den
+// Benutzer fragen kann. Fehler fuer den Anwender kommen als texte.Meldung.
 package sshx
 
 import (
@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"encoding/pem"
 	"errors"
-	"fmt"
 	"log"
 	"net"
 	"strconv"
@@ -19,6 +18,8 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/uiff/ssh-app/internal/texte"
 )
 
 // Anmeldung sind die entschluesselten Zugangsdaten fuer genau einen Verbindungsaufbau.
@@ -29,7 +30,7 @@ type Anmeldung struct {
 	Passphrase string
 }
 
-// Ziel beschreibt einen Hop.
+// Ziel ist der Host, mit dem verbunden wird.
 type Ziel struct {
 	Adresse   string
 	Port      int
@@ -50,19 +51,19 @@ func (z Ziel) Host() string { return strings.TrimSpace(z.Adresse) }
 // HostKeyPruefer entscheidet ueber einen Host-Schluessel. ziel = host:port.
 type HostKeyPruefer func(ziel string, key ssh.PublicKey) error
 
-// Fehlerarten, die die Oberflaeche verstaendlich anzeigt.
+// Fehlerarten, die die Oberflaeche verstaendlich anzeigt (Vergleich mit errors.Is).
 var (
-	ErrAnmeldung   = errors.New("Anmeldung abgelehnt — Benutzer, Passwort oder Schlüssel prüfen")
-	ErrPassphrase  = errors.New("Der Schlüssel ist mit einer Passphrase geschützt — im Zugang hinterlegen")
-	ErrAbgebrochen = errors.New("Verbindungsaufbau abgebrochen")
+	ErrAnmeldung   error = texte.Neu("sshx.anmeldung.abgelehnt")
+	ErrPassphrase  error = texte.Neu("sshx.schluessel.passphrase.fehlt")
+	ErrAbgebrochen error = texte.Neu("sshx.abgebrochen")
 )
 
 // Fristen fuer den Verbindungsaufbau. Die Wartezeit auf Rueckfragen an den Benutzer
 // (Host-Schluessel) zaehlt nicht mit. Variablen, damit Tests sie kuerzen koennen.
 var (
-	// VerbindenFrist begrenzt den TCP-Aufbau je Hop.
+	// VerbindenFrist begrenzt den TCP-Aufbau.
 	VerbindenFrist = 15 * time.Second
-	// AufbauFrist begrenzt den ganzen Aufbau (alle Hops, Handshake, Anmeldung).
+	// AufbauFrist begrenzt den ganzen Aufbau (TCP, Handshake, Anmeldung).
 	AufbauFrist = 20 * time.Second
 )
 
@@ -86,7 +87,7 @@ func authMethoden(a Anmeldung) ([]ssh.AuthMethod, error) {
 		}))
 	}
 	if len(m) == 0 {
-		return nil, errors.New("Kein Passwort und kein Schlüssel hinterlegt")
+		return nil, texte.Neu("sshx.kein.geheimnis")
 	}
 	return m, nil
 }
@@ -108,25 +109,25 @@ func schluesselLesen(pemDaten []byte, passphrase string) (ssh.Signer, error) {
 	case errors.As(err, &pp):
 		return nil, ErrPassphrase
 	case strings.Contains(err.Error(), "decryption password incorrect"): // x509.IncorrectPasswordError
-		return nil, errors.New("Die Passphrase passt nicht zum Schlüssel")
+		return nil, texte.Neu("sshx.schluessel.passphrase.falsch")
 	}
 	log.Printf("Schlüssel lesen: %v", err)
-	return nil, errors.New("Das ist kein lesbarer privater Schlüssel (OpenSSH- oder PEM-Format erwartet)")
+	return nil, texte.Neu("sshx.schluessel.unlesbar")
 }
 
-// hop ist ein Teilstueck der Verbindung samt Konfiguration.
-type hop struct {
+// aufbau ist die Verbindung zum Ziel samt Konfiguration.
+type aufbau struct {
 	ziel     Ziel
 	cfg      *ssh.ClientConfig
 	hkFehler error // Ablehnung des Host-Schluessels (schon verstaendlich formuliert)
 }
 
-func neuerHop(z Ziel, pruefer HostKeyPruefer, u *uhr) (*hop, error) {
+func neuerAufbau(z Ziel, pruefer HostKeyPruefer, u *uhr) (*aufbau, error) {
 	m, err := authMethoden(z.Anmeldung)
 	if err != nil {
 		return nil, err
 	}
-	h := &hop{ziel: z}
+	h := &aufbau{ziel: z}
 	hp := z.HostPort()
 	h.cfg = &ssh.ClientConfig{
 		User: z.Anmeldung.Benutzer,
@@ -145,68 +146,31 @@ func neuerHop(z Ziel, pruefer HostKeyPruefer, u *uhr) (*hop, error) {
 	return h, nil
 }
 
-// Verbinden baut die Verbindung auf; ist jump gesetzt, laeuft sie ueber diesen Host.
-// Zurueck kommen der Ziel-Client und eine Schliessfunktion fuer alle Hops. Fehler
-// sind verstaendliche deutsche Saetze; der rohe Text geht ins Log.
-func Verbinden(ctx context.Context, ziel Ziel, jump *Ziel, pruefer HostKeyPruefer) (*ssh.Client, func(), error) {
+// Verbinden baut die Verbindung direkt zum Ziel auf. Zurueck kommen der Client und
+// eine Schliessfunktion. Fehler sind texte.Meldung (verstaendliche Saetze in Deutsch
+// und Englisch); der rohe Text geht ins Log.
+func Verbinden(ctx context.Context, ziel Ziel, pruefer HostKeyPruefer) (*ssh.Client, func(), error) {
 	u, fctx := neueUhr(ctx, AufbauFrist)
 	defer u.stop()
-	var jc *ssh.Client
-	dial := func(z Ziel) (net.Conn, error) {
-		d := net.Dialer{Timeout: VerbindenFrist}
-		return d.DialContext(fctx, "tcp", z.HostPort())
-	}
-	if jump != nil {
-		h, err := neuerHop(*jump, pruefer, u)
-		if err != nil {
-			return nil, nil, fmt.Errorf("Jump-Host: %w", err)
-		}
-		conn, err := dial(*jump)
-		if err != nil {
-			return nil, nil, fmt.Errorf("Jump-Host: %w", netzFehler(ctx, u, *jump, err))
-		}
-		c, ch, rq, err := handshake(fctx, conn, h)
-		if err != nil {
-			return nil, nil, fmt.Errorf("Jump-Host: %w", sshFehler(ctx, u, h, err))
-		}
-		jc = ssh.NewClient(c, ch, rq)
-		dial = func(z Ziel) (net.Conn, error) {
-			dctx, cancel := context.WithTimeout(fctx, VerbindenFrist)
-			defer cancel()
-			conn, err := jc.DialContext(dctx, "tcp", z.HostPort())
-			var oce *ssh.OpenChannelError
-			if errors.As(err, &oce) {
-				return nil, &weiterleitFehler{oce}
-			}
-			return conn, err
-		}
-	}
-	schliessen := func() {
-		if jc != nil {
-			jc.Close()
-		}
-	}
-	h, err := neuerHop(ziel, pruefer, u)
+	h, err := neuerAufbau(ziel, pruefer, u)
 	if err != nil {
-		schliessen()
 		return nil, nil, err
 	}
-	conn, err := dial(ziel)
+	d := net.Dialer{Timeout: VerbindenFrist}
+	conn, err := d.DialContext(fctx, "tcp", ziel.HostPort())
 	if err != nil {
-		schliessen()
 		return nil, nil, netzFehler(ctx, u, ziel, err)
 	}
 	c, ch, rq, err := handshake(fctx, conn, h)
 	if err != nil {
-		schliessen()
 		return nil, nil, sshFehler(ctx, u, h, err)
 	}
 	client := ssh.NewClient(c, ch, rq)
-	return client, func() { client.Close(); schliessen() }, nil
+	return client, func() { client.Close() }, nil
 }
 
 // handshake fuehrt den SSH-Handshake mit Abbruch ueber ctx durch.
-func handshake(ctx context.Context, conn net.Conn, h *hop) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
+func handshake(ctx context.Context, conn net.Conn, h *aufbau) (ssh.Conn, <-chan ssh.NewChannel, <-chan *ssh.Request, error) {
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()
 	c, ch, rq, err := ssh.NewClientConn(conn, h.ziel.HostPort(), h.cfg)
@@ -289,11 +253,6 @@ func (u *uhr) stop() {
 
 // --- verstaendliche Fehler ---
 
-// weiterleitFehler: der Jump-Host konnte das Ziel nicht erreichen.
-type weiterleitFehler struct{ oce *ssh.OpenChannelError }
-
-func (w *weiterleitFehler) Error() string { return w.oce.Error() }
-
 var (
 	errVerweigert     = syscall.ECONNREFUSED
 	errKeinWeg        = syscall.EHOSTUNREACH
@@ -309,52 +268,30 @@ func netzFehler(ctx context.Context, u *uhr, z Ziel, err error) error {
 	log.Printf("Verbinden mit %s: %v", hp, err)
 	var dns *net.DNSError
 	var ne net.Error
-	var wf *weiterleitFehler
 	switch {
 	case u.istAbgelaufen():
-		return fmt.Errorf("Keine Antwort von %s (Zeitüberschreitung nach %d s)", host, sekunden(AufbauFrist))
+		return texte.Neu("sshx.netz.keine.antwort", host, sekunden(AufbauFrist))
 	case ctx.Err() != nil:
 		return ErrAbgebrochen
-	case errors.As(err, &wf):
-		return weiterleitText(z, wf.oce)
 	case errors.As(err, &dns):
 		if dns.IsNotFound {
-			return fmt.Errorf("Name %s unbekannt", dns.Name)
+			return texte.Neu("sshx.netz.name.unbekannt", dns.Name)
 		}
-		return fmt.Errorf("Name %s lässt sich nicht auflösen (Namensdienst antwortet nicht)", dns.Name)
+		return texte.Neu("sshx.netz.name.dns", dns.Name)
 	case errors.Is(err, errVerweigert):
-		return fmt.Errorf("Verbindung abgelehnt — läuft auf %s ein SSH-Dienst?", hp)
+		return texte.Neu("sshx.netz.abgelehnt", hp)
 	case errors.Is(err, errKeinWeg), errors.Is(err, errNetzWeg):
-		return fmt.Errorf("%s ist nicht erreichbar (kein Weg ins Netz)", host)
+		return texte.Neu("sshx.netz.kein.weg", host)
 	case errors.Is(err, errZurueckgesetzt):
-		return fmt.Errorf("Die Verbindung zu %s wurde zurückgesetzt", hp)
+		return texte.Neu("sshx.netz.zurueckgesetzt", hp)
 	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &ne) && ne.Timeout():
-		return fmt.Errorf("Keine Antwort von %s (Zeitüberschreitung nach %d s)", host, sekunden(VerbindenFrist))
+		return texte.Neu("sshx.netz.keine.antwort", host, sekunden(VerbindenFrist))
 	}
-	return fmt.Errorf("Verbindung zu %s fehlgeschlagen", hp)
-}
-
-// weiterleitText: Antwort des Jump-Hosts auf die Weiterleitung zum Ziel.
-func weiterleitText(z Ziel, oce *ssh.OpenChannelError) error {
-	hp, host := z.HostPort(), z.Host()
-	text := strings.ToLower(oce.Message)
-	switch {
-	case oce.Reason == ssh.Prohibited:
-		return errors.New("Der Jump-Host erlaubt keine Weiterleitung (AllowTcpForwarding)")
-	case strings.Contains(text, "refused"):
-		return fmt.Errorf("Verbindung abgelehnt — läuft auf %s ein SSH-Dienst?", hp)
-	case strings.Contains(text, "unreachable"), strings.Contains(text, "no route"):
-		return fmt.Errorf("%s ist vom Jump-Host aus nicht erreichbar (kein Weg ins Netz)", host)
-	case strings.Contains(text, "timed out"), strings.Contains(text, "timeout"):
-		return fmt.Errorf("Keine Antwort von %s (vom Jump-Host aus)", host)
-	case strings.Contains(text, "resolve"), strings.Contains(text, "not known"), strings.Contains(text, "no address"):
-		return fmt.Errorf("Name %s unbekannt (vom Jump-Host aus)", host)
-	}
-	return fmt.Errorf("Der Jump-Host erreicht %s nicht", hp)
+	return texte.Neu("sshx.netz.fehlgeschlagen", hp)
 }
 
 // sshFehler uebersetzt Fehler aus Handshake und Anmeldung.
-func sshFehler(ctx context.Context, u *uhr, h *hop, err error) error {
+func sshFehler(ctx context.Context, u *uhr, h *aufbau, err error) error {
 	hp := h.ziel.HostPort()
 	if h.hkFehler != nil {
 		return h.hkFehler
@@ -366,19 +303,19 @@ func sshFehler(ctx context.Context, u *uhr, h *hop, err error) error {
 	text := err.Error()
 	switch {
 	case u.istAbgelaufen():
-		return fmt.Errorf("Keine Antwort von %s — läuft dort ein SSH-Dienst? (Zeitüberschreitung nach %d s)", hp, sekunden(AufbauFrist))
+		return texte.Neu("sshx.ssh.keine.antwort", hp, sekunden(AufbauFrist))
 	case ctx.Err() != nil:
 		return ErrAbgebrochen
 	case errors.Is(err, errZurueckgesetzt):
-		return fmt.Errorf("Die Verbindung zu %s wurde zurückgesetzt", hp)
+		return texte.Neu("sshx.netz.zurueckgesetzt", hp)
 	case strings.HasSuffix(text, "EOF"), errors.Is(err, net.ErrClosed):
-		return fmt.Errorf("%s hat die Verbindung beendet — läuft dort ein SSH-Dienst, und lässt er diese Adresse zu?", hp)
+		return texte.Neu("sshx.ssh.beendet", hp)
 	case strings.Contains(text, "no common algorithm"):
-		return fmt.Errorf("%s bietet keine gemeinsamen Verschlüsselungsverfahren an (Gerät zu alt?)", hp)
+		return texte.Neu("sshx.ssh.verfahren", hp)
 	case strings.Contains(text, "version"), strings.Contains(text, "overflow"), strings.Contains(text, "unexpected"):
-		return fmt.Errorf("%s spricht kein SSH", hp)
+		return texte.Neu("sshx.ssh.kein.ssh", hp)
 	}
-	return fmt.Errorf("SSH-Verbindung zu %s fehlgeschlagen", hp)
+	return texte.Neu("sshx.ssh.fehlgeschlagen", hp)
 }
 
 // SchluesselInfo liefert Typ, oeffentlichen Teil (authorized_keys-Zeile) und Fingerprint.
@@ -412,7 +349,7 @@ func NeuerSchluessel(kommentar string) (privPEM []byte, err error) {
 func AuthorizedKeysBefehl(oeffentlich string) (string, error) {
 	pub, kommentar, _, _, err := ssh.ParseAuthorizedKey([]byte(oeffentlich))
 	if err != nil {
-		return "", errors.New("Der öffentliche Schlüssel ist ungültig")
+		return "", texte.Neu("sshx.schluessel.oeffentlich.ungueltig")
 	}
 	zeile := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub)))
 	if kommentar != "" && !strings.ContainsAny(kommentar, `'"\$`+"`") {

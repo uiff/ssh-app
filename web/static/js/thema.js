@@ -1,5 +1,6 @@
 'use strict';
 // Akzentfarbe der Oberflaeche: Vorgabe Violett, umstellbar in den Einstellungen.
+// Namen der Farben je Sprache: AKZENTE[i][I18N.sprache] ('de' | 'en').
 // Gespeichert je Browser (localStorage). Warn-/Fehlerfarben bleiben davon unberuehrt —
 // sie tragen Bedeutung, kein Design.
 
@@ -35,8 +36,9 @@ function akzentSetzen(id, merken) {
   if (meta) meta.setAttribute('content', '#151920');
   if (merken) { try { localStorage.setItem('sshapp.akzent', JSON.stringify(a.id)); } catch (e) { /* privat */ } }
   if (window.App && App.tabs) {
-    for (const t of App.tabs) {
-      if (t.term) t.term.options.theme = Object.assign({}, t.term.options.theme, akzentTerm(a));
+    for (const tab of App.tabs) {
+      if (tab.farbenNeu) tab.farbenNeu(); // haelt den Cursor verborgen, solange keine Verbindung steht
+      else if (tab.term) tab.term.options.theme = Object.assign({}, tab.term.options.theme, akzentTerm(a));
     }
   }
   return a;

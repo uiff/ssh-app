@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"log"
 	"net/http"
 	"slices"
@@ -20,6 +19,7 @@ import (
 	"github.com/uiff/ssh-app/internal/sshx"
 	"github.com/uiff/ssh-app/internal/store"
 	"github.com/uiff/ssh-app/internal/term"
+	"github.com/uiff/ssh-app/internal/texte"
 	"github.com/uiff/ssh-app/internal/vault"
 )
 
@@ -31,21 +31,21 @@ func (s *Server) anmeldungFuer(h store.Host) (sshx.Anmeldung, error) {
 	}
 	z, err := s.st.Zugang(h.ZugangID)
 	if errors.Is(err, store.ErrNichtGefunden) {
-		return a, fmt.Errorf("Der Zugang von «%s» fehlt — im Host-Dialog einen anderen wählen", h.Name)
+		return a, texte.Neu("server.zugang.fehlt", h.Name)
 	}
 	if err != nil {
 		log.Printf("Zugang %d lesen: %v", h.ZugangID, err)
-		return a, fmt.Errorf("Der Zugang von «%s» lässt sich nicht lesen", h.Name)
+		return a, texte.Neu("server.zugang.unlesbar", h.Name).MitUrsache(err)
 	}
 	if a.Benutzer == "" {
 		a.Benutzer = z.Benutzer
 	}
-	// Nur deutsche Saetze zum Browser (V6): kaputte Daten melden sich sonst als «cipher: …».
+	// Nur verstaendliche Saetze zum Browser (V6): kaputte Daten melden sich sonst als «cipher: …».
 	entschluesseln := func(b []byte) ([]byte, error) {
 		k, err := s.tr.Entschluesseln(b)
 		if err != nil && !errors.Is(err, vault.ErrGesperrt) {
 			log.Printf("Zugang %d entschlüsseln: %v", z.ID, err)
-			return nil, fmt.Errorf("Die gespeicherten Zugangsdaten von «%s» lassen sich nicht entschlüsseln", h.Name)
+			return nil, texte.Neu("server.zugang.entschluesseln", h.Name).MitUrsache(err)
 		}
 		return k, err
 	}
@@ -67,11 +67,11 @@ func (s *Server) anmeldungFuer(h store.Host) (sshx.Anmeldung, error) {
 
 func hatGeheimnis(a sshx.Anmeldung) bool { return a.Passwort != "" || len(a.Schluessel) > 0 }
 
-// zielFuer baut Ziel und optionalen Jump-Host. extra ergaenzt fehlende Angaben des Ziels.
-func (s *Server) zielFuer(h store.Host, extra *sshx.Anmeldung) (sshx.Ziel, *sshx.Ziel, error) {
+// zielFuer baut das Ziel eines Hosts. extra ergaenzt fehlende Angaben.
+func (s *Server) zielFuer(h store.Host, extra *sshx.Anmeldung) (sshx.Ziel, error) {
 	a, err := s.anmeldungFuer(h)
 	if err != nil {
-		return sshx.Ziel{}, nil, err
+		return sshx.Ziel{}, err
 	}
 	if extra != nil {
 		if a.Benutzer == "" {
@@ -81,32 +81,17 @@ func (s *Server) zielFuer(h store.Host, extra *sshx.Anmeldung) (sshx.Ziel, *sshx
 			a.Passwort = extra.Passwort
 		}
 	}
-	ziel := sshx.Ziel{Adresse: h.Adresse, Port: h.Port, Anmeldung: a}
-	if h.JumpID == 0 {
-		return ziel, nil, nil
-	}
-	jh, err := s.st.Host(h.JumpID)
-	if err != nil {
-		return ziel, nil, fmt.Errorf("Jump-Host nicht gefunden")
-	}
-	ja, err := s.anmeldungFuer(jh)
-	if err != nil {
-		return ziel, nil, err
-	}
-	if !hatGeheimnis(ja) || ja.Benutzer == "" {
-		return ziel, nil, fmt.Errorf("Der Jump-Host «%s» braucht einen Zugang mit Benutzer", jh.Name)
-	}
-	return ziel, &sshx.Ziel{Adresse: jh.Adresse, Port: jh.Port, Anmeldung: ja}, nil
+	return sshx.Ziel{Adresse: h.Adresse, Port: h.Port, Anmeldung: a}, nil
 }
 
 // nurBekannte akzeptiert ausschliesslich schon bestaetigte Host-Schluessel (fuer Hintergrund-Aktionen).
 func (s *Server) nurBekannte(ziel string, key ssh.PublicKey) error {
 	b, err := s.st.Bekannt(ziel)
 	if err != nil {
-		return fmt.Errorf("Host-Schlüssel von %s ist noch unbekannt — zuerst einmal im Terminal verbinden und bestätigen", ziel)
+		return texte.Neu("server.hostkey.unbekannt", ziel)
 	}
 	if b.Schluessel != base64.StdEncoding.EncodeToString(key.Marshal()) {
-		return fmt.Errorf("Host-Schlüssel von %s hat sich geändert — Verbindung abgebrochen", ziel)
+		return texte.Neu("server.hostkey.geaendert", ziel)
 	}
 	return nil
 }
@@ -145,17 +130,23 @@ const (
 )
 
 // errAbgemeldet: die Anmeldung des WebSockets ist abgelaufen.
-var errAbgemeldet = errors.New("Abgemeldet")
+var errAbgemeldet error = texte.Neu("server.ws.abgemeldet")
 
 type wsVerbindung struct {
-	s     *Server
-	c     *websocket.Conn
-	ctx   context.Context
-	token string
-	ein   chan nachricht // Text-Nachrichten vom Browser
-	bin   chan []byte    // Tastendruecke
+	s       *Server
+	c       *websocket.Conn
+	ctx     context.Context
+	token   string
+	sprache string         // Sprache der Meldungen (Parameter «sprache» beim Aufbau)
+	ein     chan nachricht // Text-Nachrichten vom Browser
+	bin     chan []byte    // Tastendruecke
 
 	zuletztBedient time.Time
+}
+
+// t liefert einen Katalogtext in der Sprache dieses Browsers.
+func (v *wsVerbindung) t(schluessel string, werte ...any) string {
+	return texte.T(v.sprache, schluessel, werte...)
 }
 
 func (v *wsVerbindung) senden(n nachricht) error { return v.sendenFrist(n, 10*time.Second) }
@@ -193,7 +184,7 @@ func (v *wsVerbindung) warten(typ string, frist time.Duration) (nachricht, error
 		select {
 		case n, ok := <-v.ein:
 			if !ok {
-				return n, errors.New("Browser getrennt")
+				return n, texte.Neu("server.ws.getrennt")
 			}
 			if n.T == typ {
 				v.bedient()
@@ -204,7 +195,7 @@ func (v *wsVerbindung) warten(typ string, frist time.Duration) (nachricht, error
 				return nachricht{}, errAbgemeldet
 			}
 		case <-t.C:
-			return nachricht{}, errors.New("Keine Antwort — abgebrochen")
+			return nachricht{}, texte.Neu("server.ws.keine.antwort")
 		case <-v.ctx.Done():
 			return nachricht{}, v.ctx.Err()
 		}
@@ -225,20 +216,20 @@ func (s *Server) originMuster(r *http.Request) []string {
 }
 
 // fehlerText macht aus einem Fehler beim Aufbau einen Satz fuer den Browser.
-func fehlerText(err error) string {
+func fehlerText(sprache string, err error) string {
 	switch {
 	case errors.Is(err, context.DeadlineExceeded):
-		return "Zeitüberschreitung beim Verbindungsaufbau"
+		return texte.T(sprache, "server.ws.zeitueberschreitung")
 	case errors.Is(err, context.Canceled):
-		return "Abgebrochen"
+		return texte.Uebersetzen(sprache, sshx.ErrAbgebrochen)
 	}
-	return err.Error()
+	return texte.Uebersetzen(sprache, err)
 }
 
 func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 	tok, err := r.Cookie(cookieName) // von angemeldet() geprueft
 	if err != nil {
-		fehler(w, http.StatusUnauthorized, "Bitte anmelden")
+		fehlerT(w, r, http.StatusUnauthorized, "server.anmelden")
 		return
 	}
 	// Origin muss zum Host passen (oder zu SSHAPP_ORIGINS).
@@ -249,7 +240,8 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 	c.SetReadLimit(1 << 20)
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
-	v := &wsVerbindung{s: s, c: c, ctx: ctx, token: tok.Value, ein: make(chan nachricht, 8), bin: make(chan []byte, 64)}
+	v := &wsVerbindung{s: s, c: c, ctx: ctx, token: tok.Value, sprache: texte.AusAnfrage(r),
+		ein: make(chan nachricht, 8), bin: make(chan []byte, 64)}
 	go func() {
 		defer cancel()
 		defer close(v.ein)
@@ -284,7 +276,7 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 	if id := q.Get("sitzung"); id != "" {
 		var ok bool
 		if sitzung, ok = s.tm.Hole(id); !ok {
-			v.senden(nachricht{T: "ende", Text: "Sitzung existiert nicht mehr"})
+			v.senden(nachricht{T: "ende", Text: v.t("server.sitzung.weg")})
 			c.Close(websocket.StatusNormalClosure, "")
 			return
 		}
@@ -299,7 +291,7 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err != nil {
-			v.senden(nachricht{T: "fehler", Text: fehlerText(err)})
+			v.senden(nachricht{T: "fehler", Text: fehlerText(v.sprache, err)})
 			c.Close(websocket.StatusNormalClosure, "")
 			return
 		}
@@ -307,7 +299,7 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 
 	// Ausgabe der Shell -> Browser. Reihenfolge: «bereit», dann der Puffer, erst
 	// danach Live-Ausgabe (Anhang.Freigeben).
-	ende := make(chan string, 1)
+	ende := make(chan *texte.Meldung, 1)
 	abgeloest := make(chan struct{})
 	var abgeloestEinmal sync.Once
 	liveCtx, liveStop := context.WithCancel(ctx)
@@ -318,26 +310,28 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 			defer wc()
 			return c.Write(wctx, websocket.MessageBinary, b) == nil
 		},
-		Ende: func(grund string) {
+		Ende: func(grund *texte.Meldung) {
 			select {
 			case ende <- grund:
 			default:
 			}
 		},
 		Abgeloest: func() { abgeloestEinmal.Do(func() { close(abgeloest) }) },
+		// Die Sitzung endet, und dieser Browser liest nicht mehr: nicht bis zur Frist warten.
+		Abbrechen: liveStop,
 	})
 	defer anhang.Loesen()
-	info := sitzung.Info()
+	info := sitzung.Info(v.sprache)
 	v.senden(nachricht{T: "bereit", ID: info.ID, Titel: info.Titel, HostID: info.HostID, FP: info.Fingerprint,
 		Wieder: &wieder, Gespeichert: gespeichert})
 	if len(puffer) > 0 {
-		wctx, wc := context.WithTimeout(ctx, 15*time.Second)
+		wctx, wc := context.WithTimeout(liveCtx, 15*time.Second)
 		c.Write(wctx, websocket.MessageBinary, puffer)
 		wc()
 	}
 	anhang.Freigeben()
 	if beendet {
-		v.senden(nachricht{T: "ende", Text: grund})
+		v.senden(nachricht{T: "ende", Text: grundText(v.sprache, grund)})
 		c.Close(websocket.StatusNormalClosure, "")
 		return
 	}
@@ -350,13 +344,13 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 			c.Close(websocket.StatusNormalClosure, "")
 			return
 		case g := <-ende:
-			v.senden(nachricht{T: "ende", Text: g})
+			v.senden(nachricht{T: "ende", Text: grundText(v.sprache, g)})
 			c.Close(websocket.StatusNormalClosure, "")
 			return
 		case <-abgeloest:
 			// Ein haengender Schreibvorgang an diesen Browser darf den neuen nicht aufhalten.
 			time.AfterFunc(2*time.Second, liveStop)
-			v.beenden(nachricht{T: "abgeloest", Text: "In einem anderen Fenster geöffnet"}, wsAbgeloest, "abgeloest")
+			v.beenden(nachricht{T: "abgeloest", Text: v.t("server.ws.abgeloest")}, wsAbgeloest, "abgeloest")
 			return
 		case <-pruef.C:
 			if !s.tokenGueltig(v.token, false) {
@@ -394,9 +388,9 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 func (s *Server) sitzungAufbauen(v *wsVerbindung, hostID int64, spalten, zeilen int) (*term.Sitzung, bool, error) {
 	h, err := s.st.Host(hostID)
 	if err != nil {
-		return nil, false, errors.New("Host nicht gefunden")
+		return nil, false, texte.Neu("server.host.unbekannt")
 	}
-	ziel, jump, err := s.zielFuer(h, nil)
+	ziel, err := s.zielFuer(h, nil)
 	if err != nil {
 		return nil, false, err
 	}
@@ -410,7 +404,7 @@ func (s *Server) sitzungAufbauen(v *wsVerbindung, hostID int64, spalten, zeilen 
 			return nil, false, err
 		}
 		if n.Abbrechen {
-			return nil, false, errors.New("Abgebrochen")
+			return nil, false, texte.Neu("server.ws.anmeldung.abgebrochen")
 		}
 		speichern = n.Speichern
 		if ziel.Anmeldung.Benutzer == "" {
@@ -423,7 +417,7 @@ func (s *Server) sitzungAufbauen(v *wsVerbindung, hostID int64, spalten, zeilen 
 			passwortGefragt = true
 		}
 		if ziel.Anmeldung.Benutzer == "" {
-			return nil, false, errors.New("Kein Benutzername angegeben")
+			return nil, false, texte.Neu("server.ws.kein.benutzer")
 		}
 	}
 
@@ -448,22 +442,22 @@ func (s *Server) sitzungAufbauen(v *wsVerbindung, hostID int64, spalten, zeilen 
 			return err
 		}
 		if !antwort.OK {
-			return errors.New("Host-Schlüssel nicht bestätigt — Verbindung abgebrochen")
+			return texte.Neu("server.hostkey.abgelehnt")
 		}
 		if status == "geaendert" {
 			log.Printf("Host-Schlüssel von %s ersetzt (%s -> %s)", zielHP, b.Fingerprint, neuFP)
 		}
 		if err := s.st.BekanntSetzen(store.BekannterHost{Ziel: zielHP, Typ: key.Type(), Schluessel: neuB64, Fingerprint: neuFP}); err != nil {
 			log.Printf("Host-Schlüssel von %s speichern: %v", zielHP, err)
-			return errors.New("Host-Schlüssel konnte nicht gespeichert werden")
+			return texte.Neu("server.hostkey.speichern")
 		}
 		return nil
 	}
 
-	v.senden(nachricht{T: "status", Text: "Verbinde mit " + ziel.HostPort() + " …"})
+	v.senden(nachricht{T: "status", Text: v.t("server.ws.verbinde", ziel.HostPort())})
 	ctx, cancel := context.WithTimeout(v.ctx, 6*time.Minute) // Rueckfragen inklusive
 	defer cancel()
-	client, schliessen, err := sshx.Verbinden(ctx, ziel, jump, pruefer)
+	client, schliessen, err := sshx.Verbinden(ctx, ziel, pruefer)
 	if err != nil {
 		return nil, false, err
 	}
@@ -485,8 +479,9 @@ func (s *Server) sitzungAufbauen(v *wsVerbindung, hostID int64, spalten, zeilen 
 	return sitzung, gespeichert, nil
 }
 
-// zugangsdatenMerken speichert beim Verbinden erfragte Angaben: mit Passwort als
-// neuen Zugang des Hosts (Name = Hostname), sonst nur den Benutzer am Host.
+// zugangsdatenMerken speichert beim Verbinden erfragte Angaben: mit Passwort im
+// eigenen Passwort-Zugang des Hosts oder als neuen Zugang (Name = Hostname), sonst
+// nur den Benutzer am Host.
 func (s *Server) zugangsdatenMerken(h store.Host, benutzer, passwort string, mitPasswort bool) bool {
 	if !mitPasswort {
 		if err := s.st.HostBenutzerSetzen(h.ID, benutzer); err != nil {
@@ -508,19 +503,32 @@ func (s *Server) zugangsdatenMerken(h store.Host, benutzer, passwort string, mit
 		name = h.Adresse
 	}
 	z := store.Zugang{Name: name, Benutzer: benutzer, Art: "passwort", PasswortEnc: enc}
-	if err := s.st.HostZugangSetzen(h.ID, &z); err != nil {
+	aktualisiert, err := s.st.HostZugangSetzen(h.ID, &z)
+	if err != nil {
 		log.Printf("Zugangsdaten für «%s» speichern: %v", name, err)
 		return false
 	}
-	log.Printf("Zugangsdaten für «%s» gespeichert", name)
+	if aktualisiert {
+		log.Printf("Zugangsdaten für «%s» im Zugang «%s» ergänzt", name, z.Name)
+	} else {
+		log.Printf("Zugangsdaten für «%s» gespeichert", name)
+	}
 	return true
 }
 
 func (s *Server) sitzungen(w http.ResponseWriter, r *http.Request) {
-	jsonAntwort(w, http.StatusOK, s.tm.Liste())
+	jsonAntwort(w, http.StatusOK, s.tm.Liste(texte.AusAnfrage(r)))
 }
 
 func (s *Server) sitzungBeenden(w http.ResponseWriter, r *http.Request) {
 	s.tm.Entfernen(r.PathValue("id"))
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// grundText: der Grund des Sitzungsendes fuer den Browser.
+func grundText(sprache string, grund *texte.Meldung) string {
+	if grund == nil {
+		return texte.T(sprache, "term.ende.verbindung")
+	}
+	return grund.Text(sprache)
 }

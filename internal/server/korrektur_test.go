@@ -705,11 +705,16 @@ func TestClientIPHinterProxy(t *testing.T) {
 			t.Errorf("%+v: %s", f, got)
 		}
 	}
-	if got := sperrSchluessel("2001:db8:1:2:3:4:5:6"); got != "2001:db8:1:2::/64" {
+	s.schnittstellen = func() []netip.Prefix { return nil }
+	stufen := func(ip string) string { return fmt.Sprint(s.sperrStufen(ip)) }
+	if got := stufen("2001:db8:1:2:3:4:5:6"); got != "[{2001:db8:1:2:3:4:5:6 5} {2001:db8:1:2::/64 30}]" {
 		t.Errorf("IPv6: %s", got)
 	}
-	if got := sperrSchluessel("::ffff:192.0.2.1"); got != "192.0.2.1" {
+	if got := stufen("::ffff:192.0.2.1"); got != "[{192.0.2.1 5}]" {
 		t.Errorf("IPv4 in IPv6: %s", got)
+	}
+	if got := stufen("fe80::1%eth0"); got != "[{fe80::1 5}]" {
+		t.Errorf("link-lokal: %s", got)
 	}
 }
 

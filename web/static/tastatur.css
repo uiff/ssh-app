@@ -1,0 +1,24 @@
+/* Bildschirmtastatur (Telefon): --tastatur = von der Tastatur verdeckte Hoehe, gesetzt von js/tastatur.js.
+   Alles, was am unteren Rand haengt, sitzt dann direkt ueber der Tastatur statt dahinter. */
+
+/* Einrichten, Anmelden, Zuruecksetzen: die Seite endet an der Tastatur, damit das Feld mit dem
+   Fokus in den sichtbaren Teil gerollt werden kann (sonst reicht der Rollbereich unter die Tastatur). */
+.einstieg { bottom: var(--tastatur, 0px); }
+@media (max-width: 899px) {
+  .dialog {
+    bottom: var(--tastatur, 0px);
+    max-height: calc(var(--app-hoehe, 100vh) - 24px - env(safe-area-inset-top, 0px));
+    transition: bottom .12s ease-out;
+  }
+  .seite.dateien, .seite.rechts { bottom: var(--tastatur, 0px); }
+  .menue { bottom: calc(8px + var(--unten, 0px) + var(--tastatur, 0px)); }
+  .palette { top: var(--vv-oben, 0px); height: var(--app-hoehe, 100%); }
+  /* Bei offener Tastatur liegt kein Home-Balken unter dem Dialog: Abstand dafuer sparen. */
+  .tastatur-offen .dialog { padding-bottom: 0; }
+  .tastatur-offen .dialog-fuss { padding-bottom: 12px; }
+  .tastatur-offen .tasten { padding-bottom: 6px; }
+  /* Anmelde-/Einrichtungsseite: bei offener Tastatur zaehlt nur das Formular — Kopf mit Logo und
+     Spruch ausblenden, damit Felder UND Knopf zusammen sichtbar sind. */
+  .tastatur-offen .einstieg-bild { display: none; }
+  .tastatur-offen .einstieg-form { padding-top: 16px; gap: 14px; }
+}

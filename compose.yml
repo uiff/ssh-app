@@ -16,7 +16,8 @@ services:
     environment:
       # Minuten ohne Bedienung, bis die Anmeldung abläuft und der Tresor sich sperrt
       SSHAPP_LEERLAUF_MIN: "30"
-      # Hinter einem Reverse-Proxy mit eigenem Zertifikat (siehe README «Betrieb hinter einem Reverse-Proxy»):
+      # Hinter einem Reverse-Proxy mit eigenem Zertifikat (siehe README.md «Running behind a reverse proxy»
+      # bzw. README.de.md «Betrieb hinter einem Reverse-Proxy»):
       # SSHAPP_ADDR: ":8080"
       # SSHAPP_TLS: "aus"
       # SSHAPP_COOKIE_SECURE: "1"

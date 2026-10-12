@@ -75,6 +75,9 @@ func main() {
 	}
 	tr, err := vault.Neu(kopf)
 	if err != nil {
+		if u := errors.Unwrap(err); u != nil {
+			log.Fatalf("Tresor: %v (%v)", err, u)
+		}
 		log.Fatalf("Tresor: %v", err)
 	}
 	hilfe, err := help.Laden(hilfeVerz)

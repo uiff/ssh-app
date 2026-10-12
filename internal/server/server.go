@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -21,6 +22,7 @@ import (
 	"github.com/uiff/ssh-app/internal/help"
 	"github.com/uiff/ssh-app/internal/store"
 	"github.com/uiff/ssh-app/internal/term"
+	"github.com/uiff/ssh-app/internal/texte"
 	"github.com/uiff/ssh-app/internal/vault"
 	"github.com/uiff/ssh-app/web"
 )
@@ -31,7 +33,9 @@ const (
 	MetaTresor = "tresor"
 	// Fehlversuche je Adresse, danach Sperre.
 	maxFehlversuche = 5
-	sperreDauer     = 15 * time.Minute
+	// Fehlversuche je fremdem IPv6-Netz (/64, ein Anschluss hat viele Adressen).
+	maxFehlversucheNetz = 30
+	sperreDauer         = 15 * time.Minute
 	// Hoechstens so viele Anfragen warten auf einen Argon2-Platz (oder rechnen); weitere bekommen 503.
 	maxArgonWartend = 16
 	// Kopf automatischer Abfragen (Zeitgeber, Wiederverbinden): sie verlaengern die Anmeldung nicht.
@@ -72,10 +76,17 @@ type Server struct {
 	wartend atomic.Int32  // Anfragen, die auf einen Argon2-Platz warten oder rechnen
 	stop    chan struct{}
 	mux     *http.ServeMux
+
+	// Eigene IPv6-Netze (/64 der Schnittstellen), kurz zwischengespeichert. schnittstellen
+	// liefert sie (Tests ersetzen die Funktion).
+	netzMu         sync.Mutex
+	netze          []netip.Prefix
+	netzeStand     time.Time
+	schnittstellen func() []netip.Prefix
 }
 
-// fehlversuch zaehlt je Adresse (IPv6: je /64) die gescheiterten und die gerade
-// laufenden Versuche.
+// fehlversuch zaehlt je Sperrstufe (Adresse oder fremdes IPv6-Netz) die gescheiterten
+// und die gerade laufenden Versuche.
 type fehlversuch struct {
 	n       int // gescheitert im aktuellen Fenster
 	laufend int // reserviert, Ergebnis steht noch aus
@@ -89,7 +100,8 @@ func Neu(st *store.Store, tr *vault.Tresor, tm *term.Manager, hilfe *help.Index,
 	}
 	s := &Server{st: st, tr: tr, tm: tm, hilfe: hilfe, opt: opt,
 		anmeldung: map[string]time.Time{}, fehler: map[string]*fehlversuch{},
-		argon: make(chan struct{}, 2), stop: make(chan struct{}), mux: http.NewServeMux()}
+		argon: make(chan struct{}, 2), stop: make(chan struct{}), mux: http.NewServeMux(),
+		schnittstellen: schnittstellenNetze}
 	s.routen()
 	go s.leerlaufWache()
 	return s
@@ -108,7 +120,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.Set("Strict-Transport-Security", "max-age=31536000")
 	}
 	if !s.hostErlaubt(r) {
-		text := "Zugriff über den Namen «" + kurz(hostOhnePort(r.Host), 80) + "» ist nicht freigegeben (Schutz vor DNS-Rebinding). Den Namen in SSHAPP_HOSTS eintragen."
+		text := texte.T(texte.AusAnfrage(r), "server.host.gesperrt", kurz(hostOhnePort(r.Host), 80))
 		if strings.HasPrefix(r.URL.Path, "/api/") {
 			fehler(w, http.StatusMisdirectedRequest, text)
 		} else {
@@ -238,14 +250,27 @@ func jsonAntwort(w http.ResponseWriter, code int, v any) {
 	json.NewEncoder(w).Encode(v)
 }
 
+// fehler antwortet mit einem fertigen Text. Neue Aufrufer nehmen fehlerT oder fehlerAus.
 func fehler(w http.ResponseWriter, code int, text string) {
 	jsonAntwort(w, code, map[string]string{"fehler": text})
+}
+
+// fehlerT antwortet mit dem Katalogtext schluessel (internal/texte) in der Sprache
+// der Anfrage; werte fuellen die fmt-Verben des Textes.
+func fehlerT(w http.ResponseWriter, r *http.Request, code int, schluessel string, werte ...any) {
+	fehler(w, code, texte.T(texte.AusAnfrage(r), schluessel, werte...))
+}
+
+// fehlerAus antwortet mit einem Fehler: eine texte.Meldung (auch eingewickelt) kommt
+// in der Sprache der Anfrage, jeder andere Fehler mit err.Error().
+func fehlerAus(w http.ResponseWriter, r *http.Request, code int, err error) {
+	fehler(w, code, texte.Uebersetzen(texte.AusAnfrage(r), err))
 }
 
 func lesen(r *http.Request, v any) error {
 	d := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20))
 	if err := d.Decode(v); err != nil {
-		return errors.New("Anfrage ist kein gültiges JSON")
+		return texte.Neu("server.json.ungueltig")
 	}
 	return nil
 }
@@ -256,7 +281,7 @@ func lesen(r *http.Request, v any) error {
 func (s *Server) csrf(f http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("X-SSH-App") != "1" {
-			fehler(w, http.StatusForbidden, "Anfrage ohne App-Kennung abgelehnt")
+			fehlerT(w, r, http.StatusForbidden, "server.csrf")
 			return
 		}
 		f(w, r)
@@ -272,7 +297,7 @@ func (s *Server) angemeldet(f http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(cookieName)
 		if err != nil || !s.tokenGueltig(c.Value, !istAuto(r)) {
-			fehler(w, http.StatusUnauthorized, "Bitte anmelden")
+			fehlerT(w, r, http.StatusUnauthorized, "server.anmelden")
 			return
 		}
 		f(w, r)
@@ -410,26 +435,85 @@ func (s *Server) clientIP(r *http.Request) string {
 	return h
 }
 
-// sperrSchluessel fasst IPv6-Adressen zum /64 zusammen (ein Anschluss hat viele).
-func sperrSchluessel(ip string) string {
+// sperrStufe ist ein Zaehler fuer Fehlversuche: die Adresse selbst oder ihr IPv6-Netz.
+type sperrStufe struct {
+	schl   string
+	grenze int
+}
+
+// sperrStufen: Jede Adresse hat ihren eigenen Zaehler. IPv6-Adressen aus fremden Netzen
+// zaehlen zusaetzlich gemeinsam je /64 mit einer lockereren Grenze, denn ein Anschluss
+// hat dort beliebig viele Adressen. Im eigenen Netz (link-lokal, ULA, ein /64 der eigenen
+// Schnittstellen) gilt nur die Adresse: sonst koennte jedes Geraet im LAN mit wenigen
+// Fehlversuchen alle anderen IPv6-Geraete aussperren.
+func (s *Server) sperrStufen(ip string) []sperrStufe {
 	a, err := netip.ParseAddr(ip)
 	if err != nil {
-		return ip
+		return []sperrStufe{{ip, maxFehlversuche}}
 	}
-	a = a.Unmap()
-	if a.Is6() {
+	a = a.Unmap().WithZone("")
+	stufen := []sperrStufe{{a.String(), maxFehlversuche}}
+	if a.Is6() && !s.eigenesNetz(a) {
 		if p, err := a.Prefix(64); err == nil {
-			return p.String()
+			stufen = append(stufen, sperrStufe{p.String(), maxFehlversucheNetz})
 		}
 	}
-	return a.String()
+	return stufen
+}
+
+// eigenesNetz: die IPv6-Adresse liegt im lokalen Netz des Servers.
+func (s *Server) eigenesNetz(a netip.Addr) bool {
+	if a.IsLoopback() || a.IsLinkLocalUnicast() || a.IsPrivate() {
+		return true
+	}
+	s.netzMu.Lock()
+	if s.netze == nil || time.Since(s.netzeStand) > time.Minute {
+		if s.schnittstellen != nil {
+			s.netze = s.schnittstellen()
+		}
+		if s.netze == nil {
+			s.netze = []netip.Prefix{}
+		}
+		s.netzeStand = time.Now()
+	}
+	netze := s.netze
+	s.netzMu.Unlock()
+	for _, p := range netze {
+		if p.Contains(a) {
+			return true
+		}
+	}
+	return false
+}
+
+// schnittstellenNetze liefert die /64-Netze der eigenen IPv6-Adressen (ohne link-lokale).
+func schnittstellenNetze() []netip.Prefix {
+	adressen, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	var out []netip.Prefix
+	for _, ad := range adressen {
+		n, ok := ad.(*net.IPNet)
+		if !ok {
+			continue
+		}
+		a, ok := netip.AddrFromSlice(n.IP)
+		if !ok || !a.Is6() || a.Is4In6() || a.IsLinkLocalUnicast() || a.IsLoopback() {
+			continue
+		}
+		if p, err := a.Prefix(64); err == nil {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // versuch ist ein reservierter Anmelde- oder Schluesselversuch einer Adresse.
 type versuch struct {
 	s      *Server
-	f      *fehlversuch
-	schl   string
+	f      []*fehlversuch // je Sperrstufe, die eigene Adresse zuerst
+	stufen []sperrStufe
 	fertig bool
 }
 
@@ -439,28 +523,46 @@ const (
 	versuchRichtig
 )
 
+// dauerText: Restdauer einer Sperre, aufgerundet («15 min», «40 s»).
+func dauerText(d time.Duration) string {
+	if d > time.Minute {
+		return strconv.Itoa(int((d+time.Minute-1)/time.Minute)) + " min"
+	}
+	return strconv.Itoa(max(1, int((d+time.Second-1)/time.Second))) + " s"
+}
+
 // versuchBeginnen reserviert einen Versuch, bevor gerechnet wird. Gleichzeitige
-// Anfragen zaehlen so schon gegen die Grenze; mehr als maxFehlversuche sind je
-// Sperrfenster nicht moeglich. Ohne Reservierung kommt der Grund der Ablehnung zurueck.
-func (s *Server) versuchBeginnen(r *http.Request) (*versuch, string) {
-	schl := sperrSchluessel(s.clientIP(r))
+// Anfragen zaehlen so schon gegen die Grenze; mehr als die Grenze sind je Sperrfenster
+// nicht moeglich. Ohne Reservierung kommt der Grund der Ablehnung (texte.Meldung) zurueck.
+func (s *Server) versuchBeginnen(r *http.Request) (*versuch, error) {
+	stufen := s.sperrStufen(s.clientIP(r))
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	f := s.fehler[schl]
-	if f == nil {
-		f = &fehlversuch{}
-		s.fehler[schl] = f
-	}
 	jetzt := time.Now()
-	f.zuletzt = jetzt
-	if jetzt.Before(f.bis) {
-		return nil, "Zu viele Fehlversuche — noch " + f.bis.Sub(jetzt).Round(time.Second).String() + " gesperrt"
+	fs := make([]*fehlversuch, len(stufen))
+	for i, st := range stufen {
+		f := s.fehler[st.schl]
+		if f == nil {
+			f = &fehlversuch{}
+			s.fehler[st.schl] = f
+		}
+		f.zuletzt = jetzt
+		fs[i] = f
 	}
-	if f.n+f.laufend >= maxFehlversuche {
-		return nil, "Zu viele Anmeldeversuche gleichzeitig — bitte kurz warten"
+	for _, f := range fs {
+		if jetzt.Before(f.bis) {
+			return nil, texte.Neu("server.sperre.aktiv", dauerText(f.bis.Sub(jetzt)))
+		}
 	}
-	f.laufend++
-	return &versuch{s: s, f: f, schl: schl}, ""
+	for i, f := range fs {
+		if f.n+f.laufend >= stufen[i].grenze {
+			return nil, texte.Neu("server.sperre.gleichzeitig")
+		}
+	}
+	for _, f := range fs {
+		f.laufend++
+	}
+	return &versuch{s: s, f: fs, stufen: stufen}, nil
 }
 
 func (v *versuch) beenden(ergebnis int) {
@@ -470,20 +572,25 @@ func (v *versuch) beenden(ergebnis int) {
 		return
 	}
 	v.fertig = true
-	f := v.f
-	f.laufend--
-	f.zuletzt = time.Now()
-	switch ergebnis {
-	case versuchFalsch:
-		f.n++
-		if f.n >= maxFehlversuche {
-			f.bis = time.Now().Add(sperreDauer)
-			f.n = 0
-			log.Printf("Anmeldung für %s nach %d Fehlversuchen für %s gesperrt", v.schl, maxFehlversuche, sperreDauer)
+	jetzt := time.Now()
+	for i, f := range v.f {
+		f.laufend--
+		f.zuletzt = jetzt
+		switch ergebnis {
+		case versuchFalsch:
+			f.n++
+			if g := v.stufen[i].grenze; f.n >= g {
+				f.bis = jetzt.Add(sperreDauer)
+				f.n = 0
+				log.Printf("Anmeldung für %s nach %d Fehlversuchen für %s gesperrt", v.stufen[i].schl, g, sperreDauer)
+			}
+		case versuchRichtig:
+			// Nur den Zaehler der eigenen Adresse zuruecksetzen; eine laufende Sperre bleibt
+			// bestehen, und der Zaehler eines fremden Netzes laeuft weiter.
+			if i == 0 {
+				f.n = 0
+			}
 		}
-	case versuchRichtig:
-		// Nur den Zaehler zuruecksetzen; eine laufende Sperre bleibt bestehen.
-		f.n = 0
 	}
 }
 
@@ -491,7 +598,7 @@ func (v *versuch) falsch()    { v.beenden(versuchFalsch) }
 func (v *versuch) richtig()   { v.beenden(versuchRichtig) }
 func (v *versuch) abbrechen() { v.beenden(versuchOffen) }
 
-var errBelegt = errors.New("Gerade zu viele Anmeldeversuche — bitte kurz warten")
+var errBelegt error = texte.Neu("server.argon.belegt")
 
 // mitArgon fuehrt f aus, sobald einer der Argon2-Plaetze frei ist. Die Warteschlange
 // ist begrenzt (errBelegt), und Anfragen, deren Browser schon weg ist, rechnen nicht.
@@ -515,9 +622,9 @@ func (s *Server) mitArgon(ctx context.Context, f func()) error {
 }
 
 // argonFehler antwortet auf einen Fehler von mitArgon (ist der Browser weg, nicht mehr).
-func argonFehler(w http.ResponseWriter, err error) {
+func argonFehler(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, errBelegt) {
-		fehler(w, http.StatusServiceUnavailable, err.Error())
+		fehlerAus(w, r, http.StatusServiceUnavailable, err)
 	}
 }
 
@@ -551,37 +658,37 @@ type zugangsdaten struct {
 func (s *Server) einrichten(w http.ResponseWriter, r *http.Request) {
 	var z zugangsdaten
 	if err := lesen(r, &z); err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if s.tr.Angelegt() { // schnelle Antwort ohne Warten auf andere Vorgaenge
-		fehler(w, http.StatusConflict, vault.ErrSchonAngelegt.Error())
+		fehlerAus(w, r, http.StatusConflict, vault.ErrSchonAngelegt)
 		return
 	}
 	s.kopfMu.Lock()
 	defer s.kopfMu.Unlock()
 	if s.tr.Angelegt() {
-		fehler(w, http.StatusConflict, vault.ErrSchonAngelegt.Error())
+		fehlerAus(w, r, http.StatusConflict, vault.ErrSchonAngelegt)
 		return
 	}
 	var kopf []byte
 	var sk string
 	var err error
 	if e := s.mitArgon(r.Context(), func() { kopf, sk, err = s.tr.Einrichten(strings.TrimSpace(z.Benutzer), z.Passwort) }); e != nil {
-		argonFehler(w, e)
+		argonFehler(w, r, e)
 		return
 	}
 	if errors.Is(err, vault.ErrSchonAngelegt) {
-		fehler(w, http.StatusConflict, err.Error())
+		fehlerAus(w, r, http.StatusConflict, err)
 		return
 	}
 	if err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if err := s.st.SetMeta(MetaTresor, kopf); err != nil {
 		log.Printf("Einrichtung speichern: %v", err)
-		fehler(w, http.StatusInternalServerError, "Speichern fehlgeschlagen")
+		fehlerT(w, r, http.StatusInternalServerError, "server.speichern.fehlgeschlagen")
 		return
 	}
 	log.Printf("Einrichtung abgeschlossen (Benutzer %s, von %s)", s.tr.Benutzer(), s.clientIP(r))
@@ -592,28 +699,28 @@ func (s *Server) einrichten(w http.ResponseWriter, r *http.Request) {
 func (s *Server) anmelden(w http.ResponseWriter, r *http.Request) {
 	v, grund := s.versuchBeginnen(r)
 	if v == nil {
-		fehler(w, http.StatusTooManyRequests, grund)
+		fehlerAus(w, r, http.StatusTooManyRequests, grund)
 		return
 	}
 	defer v.abbrechen()
 	var z zugangsdaten
 	if err := lesen(r, &z); err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	var err error
 	if e := s.mitArgon(r.Context(), func() { err = s.tr.Anmelden(strings.TrimSpace(z.Benutzer), z.Passwort) }); e != nil {
-		argonFehler(w, e)
+		argonFehler(w, r, e)
 		return
 	}
 	if errors.Is(err, vault.ErrNichtAngelegt) {
-		fehler(w, http.StatusConflict, err.Error())
+		fehlerAus(w, r, http.StatusConflict, err)
 		return
 	}
 	if err != nil {
 		v.falsch()
 		log.Printf("Fehlgeschlagene Anmeldung von %s", s.clientIP(r))
-		fehler(w, http.StatusUnauthorized, err.Error())
+		fehlerAus(w, r, http.StatusUnauthorized, err)
 		return
 	}
 	v.richtig()
@@ -639,13 +746,13 @@ func (s *Server) abmelden(w http.ResponseWriter, r *http.Request) {
 func (s *Server) zuruecksetzen(w http.ResponseWriter, r *http.Request) {
 	v, grund := s.versuchBeginnen(r)
 	if v == nil {
-		fehler(w, http.StatusTooManyRequests, grund)
+		fehlerAus(w, r, http.StatusTooManyRequests, grund)
 		return
 	}
 	defer v.abbrechen()
 	var z zugangsdaten
 	if err := lesen(r, &z); err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	s.kopfMu.Lock()
@@ -653,22 +760,22 @@ func (s *Server) zuruecksetzen(w http.ResponseWriter, r *http.Request) {
 	var kopf []byte
 	var err error
 	if e := s.mitArgon(r.Context(), func() { kopf, err = s.tr.Zuruecksetzen(z.Schluessel, strings.TrimSpace(z.Benutzer), z.Passwort) }); e != nil {
-		argonFehler(w, e)
+		argonFehler(w, r, e)
 		return
 	}
 	if errors.Is(err, vault.ErrSchluesselFalsch) {
 		v.falsch()
 		log.Printf("Zurücksetzen mit falschem Sicherheitsschlüssel von %s", s.clientIP(r))
-		fehler(w, http.StatusUnauthorized, err.Error())
+		fehlerAus(w, r, http.StatusUnauthorized, err)
 		return
 	}
 	if err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if err := s.st.SetMeta(MetaTresor, kopf); err != nil {
 		log.Printf("Zurücksetzen speichern: %v", err)
-		fehler(w, http.StatusInternalServerError, "Speichern fehlgeschlagen")
+		fehlerT(w, r, http.StatusInternalServerError, "server.speichern.fehlgeschlagen")
 		return
 	}
 	v.richtig()
@@ -680,13 +787,13 @@ func (s *Server) zuruecksetzen(w http.ResponseWriter, r *http.Request) {
 func (s *Server) passwortAendern(w http.ResponseWriter, r *http.Request) {
 	v, grund := s.versuchBeginnen(r)
 	if v == nil {
-		fehler(w, http.StatusTooManyRequests, grund)
+		fehlerAus(w, r, http.StatusTooManyRequests, grund)
 		return
 	}
 	defer v.abbrechen()
 	var p struct{ Alt, Neu string }
 	if err := lesen(r, &p); err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	s.kopfMu.Lock()
@@ -694,7 +801,7 @@ func (s *Server) passwortAendern(w http.ResponseWriter, r *http.Request) {
 	var kopf []byte
 	var err error
 	if e := s.mitArgon(r.Context(), func() { kopf, err = s.tr.PasswortAendern(p.Alt, p.Neu) }); e != nil {
-		argonFehler(w, e)
+		argonFehler(w, r, e)
 		return
 	}
 	if errors.Is(err, vault.ErrAltFalsch) {
@@ -702,12 +809,12 @@ func (s *Server) passwortAendern(w http.ResponseWriter, r *http.Request) {
 		log.Printf("Passwort ändern mit falschem bisherigem Passwort von %s", s.clientIP(r))
 	}
 	if err != nil {
-		fehler(w, http.StatusBadRequest, err.Error())
+		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
 	if err := s.st.SetMeta(MetaTresor, kopf); err != nil {
 		log.Printf("Passwort ändern speichern: %v", err)
-		fehler(w, http.StatusInternalServerError, "Speichern fehlgeschlagen")
+		fehlerT(w, r, http.StatusInternalServerError, "server.speichern.fehlgeschlagen")
 		return
 	}
 	v.richtig()

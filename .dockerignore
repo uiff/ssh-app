@@ -2,5 +2,6 @@
 data
 *.db*
 tools
+docs
 *.md
 !README.md
