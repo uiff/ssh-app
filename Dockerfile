@@ -2,7 +2,8 @@
 # Keyway by IoTUeli — ein statisches Go-Programm in einem minimalen Image (ohne Shell).
 # Programm, Image und Repository heissen weiterhin «ssh-app» (Kompatibilitaet).
 # Uebersetzt per Cross-Compile fuer die Zielplattform, also auch arm64 ohne QEMU.
-#   Auf dem Zielgeraet selbst (Plattform automatisch):  docker compose up -d --build
+# Fertige Images (amd64 + arm64) baut .github/workflows/container.yml: iotuelich/keyway, ghcr.io/uiff/keyway.
+#   Auf dem Zielgeraet selbst (Plattform automatisch):  docker build -t ssh-app .
 #   Fuer ein anderes Geraet (eine Plattform, landet im lokalen Image-Speicher):
 #     docker buildx build --platform linux/arm64 -t ssh-app --load .
 #   Mehrere Plattformen auf einmal brauchen einen buildx-Builder mit Treiber
@@ -50,9 +51,10 @@ RUN apk add --no-cache curl zip \
 # --- 3. Laufzeit: distroless, laeuft als Benutzer «nonroot» (65532) --------
 FROM gcr.io/distroless/static-debian12:nonroot
 LABEL org.opencontainers.image.title="Keyway" \
-      org.opencontainers.image.description="Keyway by IoTUeli: self-hosted web SSH client with terminal, files, command help, and an encrypted vault" \
-      org.opencontainers.image.url="https://iotueli.ch" \
+      org.opencontainers.image.description="Keyway by IoTUeli: self-hosted web SSH & VNC client with SFTP, encrypted vault and offline command help" \
+      org.opencontainers.image.url="https://hub.docker.com/r/iotuelich/keyway" \
       org.opencontainers.image.source="https://github.com/uiff/ssh-app" \
+      org.opencontainers.image.documentation="https://github.com/uiff/ssh-app#readme" \
       org.opencontainers.image.vendor="IoTUeli" \
       org.opencontainers.image.licenses="MIT"
 COPY --from=bau /out/ssh-app /app/ssh-app

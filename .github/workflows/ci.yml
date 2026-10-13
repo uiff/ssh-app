@@ -1,0 +1,40 @@
+# Pruefung bei jedem Push und Pull-Request; der Container-Workflow ruft sie vor dem Bau auf.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Formatierung (gofmt)
+        run: |
+          falsch=$(gofmt -l cmd internal web tools)
+          if [ -n "$falsch" ]; then echo "Nicht gofmt-formatiert:"; echo "$falsch"; exit 1; fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: Tests (mit Race-Detector)
+        run: go test -race -count=1 ./...
+
+      - name: JavaScript-Syntax
+        run: |
+          for f in web/static/js/*.js web/static/js/*.mjs web/static/js/sprache/*.js tools/*.js; do
+            node --check "$f" || exit 1
+          done

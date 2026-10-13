@@ -1,11 +1,18 @@
-# Keyway (Dienst, Image und Container heissen weiterhin «ssh-app») starten:
-#   docker compose up -d --build
+# Keyway (Dienst, Container und Volume heissen weiterhin «ssh-app») starten:
+#   docker compose up -d
+# Laedt das fertige Image fuer amd64 oder arm64 von Docker Hub. Aktualisieren:
+#   docker compose pull && docker compose up -d
 # Danach im Browser: https://<adresse-dieses-rechners>:8443 — und gleich einrichten:
 # bis dahin kann jeder, der die Adresse erreicht, das Konto anlegen.
 services:
   ssh-app:
-    build: .
-    image: ssh-app:latest
+    image: iotuelich/keyway:latest
+    # Gleiches Image auf der GitHub Container Registry:
+    # image: ghcr.io/uiff/keyway:latest
+    # Selbst aus diesem Repository bauen statt laden: die Zeile «image:» oben durch die beiden
+    # folgenden ersetzen und «docker compose up -d --build» aufrufen.
+    # build: .
+    # image: ssh-app:latest
     container_name: ssh-app
     restart: unless-stopped
     ports:

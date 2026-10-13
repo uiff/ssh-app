@@ -11,6 +11,15 @@
 </p>
 
 <p align="center">
+  <a href="https://hub.docker.com/r/iotuelich/keyway"><img src="https://img.shields.io/docker/v/iotuelich/keyway?sort=semver&logo=docker&logoColor=white&label=Docker%20Hub" alt="Docker Hub"></a>
+  <a href="https://hub.docker.com/r/iotuelich/keyway"><img src="https://img.shields.io/docker/image-size/iotuelich/keyway?sort=semver&label=Image-Größe" alt="Image-Größe"></a>
+  <a href="https://github.com/uiff/ssh-app/pkgs/container/keyway"><img src="https://img.shields.io/badge/ghcr.io-uiff%2Fkeyway-2088FF?logo=github" alt="GitHub Container Registry"></a>
+  <img src="https://img.shields.io/badge/Plattformen-amd64%20%7C%20arm64-6E56CF" alt="Plattformen: amd64, arm64">
+  <a href="https://github.com/uiff/ssh-app/actions/workflows/ci.yml"><img src="https://github.com/uiff/ssh-app/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/Lizenz-MIT-3DA639" alt="MIT"></a>
+</p>
+
+<p align="center">
   Ein selbst gehosteter Web-SSH-Client: Terminal, Bildschirm (VNC), Dateien und Befehlshilfe in einem Browser-Tab, am
   Rechner und auf dem Telefon.
 </p>
@@ -237,10 +246,24 @@ und bedienen. Jeder Bildschirm öffnet sich als Tab neben den Terminals, auch me
 
 ## Schnellstart
 
+Fertige Images für `linux/amd64` und `linux/arm64` (z. B. Raspberry Pi oder Industrie-Controller) gibt es auf
+[Docker Hub](https://hub.docker.com/r/iotuelich/keyway) und in der
+[GitHub Container Registry](https://github.com/uiff/ssh-app/pkgs/container/keyway). Docker wählt die passende Plattform
+selbst.
+
+**Mit Docker Compose** (empfohlen, die Compose-Datei härtet den Container zusätzlich):
+
 ```bash
-git clone https://github.com/uiff/ssh-app.git
-cd ssh-app
-docker compose up -d --build
+mkdir keyway && cd keyway
+curl -fsSLO https://raw.githubusercontent.com/uiff/ssh-app/main/compose.yml
+docker compose up -d
+```
+
+**Oder mit einem einzigen Befehl:**
+
+```bash
+docker run -d --name ssh-app -p 8443:8443 -v ssh-app-daten:/data --restart unless-stopped --stop-timeout 30 \
+  iotuelich/keyway:latest
 ```
 
 Danach im Browser `https://<adresse-des-rechners>:8443` öffnen und **sofort einrichten** (siehe unten). Die App erzeugt
@@ -252,6 +275,55 @@ alten Namen `ssh-app` und damit auch ihren Fingerabdruck. Wer den neuen Namen wi
 Daten-Volume den Ordner `tls` (zum Beispiel mit `docker run --rm --volumes-from ssh-app alpine rm -rf /data/tls`) und
 startet ihn wieder. Danach ändert sich der Fingerabdruck, und der Browser warnt noch einmal.
 
+Die Compose-Datei härtet den Container zusätzlich (nur lesbares Dateisystem, keine Linux-Capabilities). Wer `docker run`
+nimmt, kann das mit `--read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true` nachbilden.
+
+Statt des Volumes geht auch ein Ordner des Rechners (`-v /pfad/zu/daten:/data`). Er muss dem Benutzer gehören, als der die
+App im Container läuft: `sudo chown 65532:65532 /pfad/zu/daten`. Sonst bricht der Start mit einem Hinweis im Log ab.
+
+### Images und Tags
+
+| Image | Wo |
+|---|---|
+| `iotuelich/keyway` | [Docker Hub](https://hub.docker.com/r/iotuelich/keyway) |
+| `ghcr.io/uiff/keyway` | [GitHub Container Registry](https://github.com/uiff/ssh-app/pkgs/container/keyway), dieselben Images |
+
+| Tag | Bedeutung |
+|---|---|
+| `latest` | die neueste Version |
+| `0.3.0` | genau diese Version |
+| `0.3` | die neueste Version von 0.3.x (nur Fehlerbehebungen) |
+
+Jedes Image baut [GitHub Actions](https://github.com/uiff/ssh-app/actions/workflows/container.yml) aus diesem
+Repository. Es wird vor dem Veröffentlichen getestet und einmal gestartet und trägt einen Herkunftsnachweis
+(Provenance) und eine Stückliste (SBOM).
+
+### Version und Aktualisieren
+
+Welche Version läuft, steht unter Einstellungen › Über. Zum Aktualisieren zuerst ein Backup herunterladen
+(Einstellungen › Backup), dann:
+
+```bash
+docker compose pull
+docker compose up -d
+```
+
+Ohne Compose: `docker pull iotuelich/keyway:latest`, dann `docker stop ssh-app && docker rm ssh-app` und den Container
+mit demselben `docker run`-Befehl wieder starten. Hosts, Zugänge und die Anmeldung bleiben im Volume erhalten. Wer bei
+einer Versionslinie bleiben will, nimmt statt `latest` einen Tag wie `iotuelich/keyway:0.3`.
+
+### Selbst bauen
+
+Wer das Image selbst bauen will, zum Beispiel um eine Änderung auszuprobieren:
+
+```bash
+git clone https://github.com/uiff/ssh-app.git
+cd ssh-app
+```
+
+In `compose.yml` die Zeile `image: iotuelich/keyway:latest` durch die beiden auskommentierten Zeilen `build: .` und
+`image: ssh-app:latest` ersetzen, dann `docker compose up -d --build`. Aktualisieren: `git pull` und derselbe Befehl.
+
 Ohne Compose:
 
 ```bash
@@ -259,32 +331,11 @@ docker build -t ssh-app https://github.com/uiff/ssh-app.git
 docker run -d --name ssh-app -p 8443:8443 -v ssh-app-daten:/data --restart unless-stopped --stop-timeout 30 ssh-app
 ```
 
-Die Compose-Datei härtet den Container zusätzlich (nur lesbares Dateisystem, keine Linux-Capabilities). Wer `docker run`
-nimmt, kann das mit `--read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges:true` nachbilden.
-
-Statt des Volumes geht auch ein Ordner des Rechners (`-v /pfad/zu/daten:/data`). Er muss dem Benutzer gehören, als der die
-App im Container läuft: `sudo chown 65532:65532 /pfad/zu/daten`. Sonst bricht der Start mit einem Hinweis im Log ab.
-
-### Version und Aktualisieren
-
 `git clone` und `docker build` mit der Adresse des Repositorys bauen beide den aktuellen Stand des Standard-Branches.
-Welche Version läuft, steht unter Einstellungen › Über. Zum Aktualisieren zuerst ein Backup herunterladen
-(Einstellungen › Backup), dann:
 
-```bash
-git pull
-docker compose up -d --build
-```
+Das Programm wird per Cross-Compile übersetzt, für eine andere Plattform braucht es keinen Emulator (QEMU):
 
-Ohne Compose das Image wie oben neu bauen, dann `docker stop ssh-app && docker rm ssh-app` und den Container mit
-demselben `docker run`-Befehl wieder starten. Hosts, Zugänge und die Anmeldung bleiben im Volume erhalten.
-
-### Für Raspberry Pi und andere Plattformen bauen
-
-Das Image gibt es für `linux/amd64` und `linux/arm64` (z. B. Raspberry Pi oder Industrie-Controller). Das Programm wird per
-Cross-Compile übersetzt, ein Emulator (QEMU) ist nicht nötig.
-
-- **Auf dem Gerät selbst:** `docker compose up -d --build` wie oben, die Plattform ergibt sich von selbst.
+- **Auf dem Gerät selbst:** wie oben bauen, die Plattform ergibt sich von selbst.
 - **Auf einem anderen Rechner für ein Gerät** (eine Plattform, klappt mit dem Standard-Builder):
 
   ```bash
@@ -293,7 +344,8 @@ Cross-Compile übersetzt, ein Emulator (QEMU) ist nicht nötig.
   ```
 
   Die Datei aufs Gerät kopieren, dort `docker load -i ssh-app-arm64.tar.gz` und den Container mit `docker run` wie oben
-  starten. Mit der Compose-Datei geht es auch: `docker compose up -d` (ohne `--build`) nimmt das geladene Image `ssh-app:latest`.
+  starten (Image `ssh-app`). Mit der Compose-Datei die Bau-Zeilen von oben nehmen und `docker compose up -d` ohne
+  `--build` aufrufen, dann nimmt sie das geladene Image `ssh-app:latest`.
 - **Mehrere Plattformen in einem Image:** Das braucht einen buildx-Builder mit dem Treiber `docker-container`. Der
   Standard-Builder (Treiber `docker`) lehnt mehrere Plattformen ab, ausser der containerd-Image-Speicher ist eingeschaltet.
   Ein Image für mehrere Plattformen lässt sich ausserdem nicht in den lokalen Image-Speicher laden, es gehört in eine Registry:
@@ -549,6 +601,22 @@ Backup-Format) tragen weiterhin den alten Namen `ssh-app`, damit bestehende Inst
 - Wächter-Tests: `web/sprache_test.go` (jeder im Browser-Code benutzte Schlüssel steht in beiden Sprachen, keiner ist
   ungenutzt, kein deutscher Text ausserhalb der Kataloge, keine Emoji) und `internal/server/rohtext_test.go` (keine
   Text-Literale in HTTP- und WebSocket-Antworten, jeder im Go-Code benutzte Schlüssel existiert mit passenden Platzhaltern).
+
+### Neue Version veröffentlichen
+
+Ein Versions-Tag baut und veröffentlicht die Images (`.github/workflows/container.yml`): Tests, ein Probestart des
+Images, dann der Bau für `linux/amd64` und `linux/arm64` und das Hochladen nach ghcr.io und Docker Hub. Die Beschreibung
+auf Docker Hub kommt aus [`DOCKERHUB.md`](DOCKERHUB.md).
+
+```bash
+git tag v0.3.1
+git push origin v0.3.1
+```
+
+Für Docker Hub braucht es zwei Repository-Secrets (Settings › Secrets and variables › Actions): `DOCKERHUB_USERNAME` und
+`DOCKERHUB_TOKEN`, ein Docker-Hub-Zugriffstoken (Personal Access Token) mit «Read, Write, Delete» (nötig für die
+Beschreibung). Ohne sie gehen die Images nur nach ghcr.io. Von Hand auf `main` gestartet, veröffentlicht der Workflow den
+Tag `edge`.
 
 ## Lizenz
 
