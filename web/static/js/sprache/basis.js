@@ -20,7 +20,7 @@ i18nErgaenzen({
     'basis.schliessen': 'Close',
     'basis.bestaetigen': 'Please confirm',
     'basis.kopiert': 'Copied',
-    'basis.kopierenFehler': "Couldn't copy",
+    'basis.kopierenFehler': 'Couldn’t copy',
     'basis.netzFehler': 'Server unreachable — check your network connection',
     'basis.fehlerStatus': 'Error {status}',
     'basis.sprache': 'Language',

@@ -217,16 +217,41 @@ function ordnerMenue(o, anker) {
 
 // ---------- Host-Dialog ----------
 
-// Zerlegt «benutzer@host:port», «[fe80::1]:2222», «ssh://…» und «ssh -p 2222 root@host».
-// Nicht erkannte Teile bleiben weg; die Adresse selbst kommt immer zurueck.
+// ssh-Optionen mit Wert («-p 2222», «-i datei», «-l root» …); der Wert steht direkt dahinter oder im
+// naechsten Wort.
+const SSH_OPTIONEN_MIT_WERT = 'BbcDEeFIiJLlmOoPpQRSWw';
+
+// Zerlegt «benutzer@host:port», «[fe80::1]:2222», «ssh://…», «host -p 2222» und ssh-Aufrufe wie
+// «ssh -p 2222 -l root host» (Ziel = erstes Wort, das keine Option ist; ein Befehl dahinter faellt weg).
+// Ohne «ssh» davor ist ein Leerzeichen kein Trenner, sondern ein Fehler: dann ist r.leerzeichen
+// gesetzt und r.adresse die unveraenderte Eingabe — nichts wird still abgeschnitten.
 function adresseZerlegen(text) {
-  let s = String(text || '').trim().replace(/^ssh\s+/i, '');
+  const roh = String(text || '').trim();
   const r = {};
-  const p = s.match(/(?:^|\s)-p\s*(\d+)(?=\s|$)/);
-  if (p) { r.port = +p[1]; s = s.replace(p[0], ' '); }
-  const teile = s.split(/\s+/).filter(Boolean);
-  s = teile.find((x) => x.includes('@')) || teile[teile.length - 1] || '';
-  s = s.replace(/^ssh:\/\//i, '').replace(/\/+$/, '');
+  const ssh = /^ssh\s/i.test(roh);
+  const woerter = roh.split(/\s+/).filter(Boolean);
+  if (ssh) woerter.shift();
+  const rest = [];
+  for (let i = 0; i < woerter.length; i++) {
+    const w = woerter[i];
+    if (!ssh) {
+      // Ohne «ssh» gilt nur «-p 2222» bzw. «-p2222» als Option.
+      const p = w.match(/^-p(\d*)$/);
+      const wert = p ? p[1] || woerter[i + 1] : '';
+      if (p && /^\d+$/.test(wert || '')) { r.port = +wert; if (!p[1]) i++; } else rest.push(w);
+      continue;
+    }
+    if (!/^-./.test(w)) { rest.push(w); continue; }
+    for (let j = 1; j < w.length; j++) {
+      if (!SSH_OPTIONEN_MIT_WERT.includes(w[j])) continue; // Schalter wie -v oder -4
+      const wert = j + 1 < w.length ? w.slice(j + 1) : woerter[++i];
+      if (w[j] === 'p' && /^\d+$/.test(wert || '')) r.port = +wert;
+      if (w[j] === 'l' && wert) r.benutzer = wert;
+      break;
+    }
+  }
+  if (!ssh && rest.length > 1) { r.leerzeichen = true; r.adresse = roh; return r; }
+  let s = (rest[0] || '').replace(/^ssh:\/\//i, '').replace(/\/+$/, '');
   const at = s.lastIndexOf('@');
   if (at >= 0) { if (at > 0) r.benutzer = s.slice(0, at); s = s.slice(at + 1); }
   const klammer = s.match(/^\[([^\]]+)\](?::(\d+))?$/);
@@ -299,9 +324,16 @@ App.hostBearbeiten = function (h) {
   f.name = text('h-name', h.name && h.name !== h.adresse ? h.name : '', { placeholder: t('hosts.host.namePlatzhalter') });
   const namePlatzhalter = () => { f.name.placeholder = f.adresse.value.trim() || t('hosts.host.namePlatzhalter'); };
   f.adresse = text('h-adresse', h.adresse, { placeholder: t('hosts.host.adressePlatzhalter'), inputmode: 'url', required: true,
-    oninput: () => { namePlatzhalter(); f.adresse.removeAttribute('aria-invalid'); },
+    'aria-describedby': 'h-adresse-hinweis',
+    oninput: () => { namePlatzhalter(); f.adresse.removeAttribute('aria-invalid'); adrHinweisSetzen(t('hosts.host.adresseHinweis')); },
     onchange: () => adresseUebernehmen() });
-  const adrHinweis = el('div', { class: 'hinweis' }, t('hosts.host.adresseHinweis'));
+  const adrHinweis = el('div', { id: 'h-adresse-hinweis', class: 'hinweis' }, t('hosts.host.adresseHinweis'));
+  // Hinweis unter der Adresse; als Fehler rot und mit aria-invalid am Feld.
+  const adrHinweisSetzen = (text, fehler) => {
+    adrHinweis.textContent = text;
+    adrHinweis.classList.toggle('fehler', !!fehler);
+    if (fehler) f.adresse.setAttribute('aria-invalid', 'true');
+  };
   f.benutzer = text('h-benutzer', h.benutzer || (eigen && eigen.benutzer) || '', { placeholder: t('hosts.host.benutzerPlatzhalter') });
   f.ordner = el('select', { id: 'h-ordner', onchange: async () => {
     if (f.ordner.value === 'neu') { const o = await ordnerAnlegen(); ordnerOptionen(o ? o.id : 0); }
@@ -415,17 +447,19 @@ App.hostBearbeiten = function (h) {
 
   const erwTeil = el('div', { class: 'erweitert-teil' }, erwKnopf, erwBereich);
 
-  // «benutzer@host:port» aus dem Adressfeld auf Benutzer und Port verteilen.
+  // «benutzer@host:port» aus dem Adressfeld auf Benutzer und Port verteilen. Eine Adresse mit
+  // Leerzeichen (kein ssh-Aufruf) bleibt stehen und bekommt eine sichtbare Meldung.
   const adresseUebernehmen = () => {
     const roh = f.adresse.value.trim();
     if (!/[@\s[]|:\d+$|^ssh:/i.test(roh)) return;
     const r = adresseZerlegen(roh);
+    if (r.leerzeichen) { adrHinweisSetzen(t('hosts.host.fehlerAdresseLeerzeichen'), true); return; }
     const neuWerte = [];
     f.adresse.value = r.adresse;
     if (r.benutzer && r.benutzer !== f.benutzer.value.trim()) { f.benutzer.value = r.benutzer; neuWerte.push(t('hosts.host.uebBenutzer', { benutzer: r.benutzer })); }
     if (r.port && String(r.port) !== String(f.port.value)) { f.port.value = r.port; neuWerte.push(t('hosts.host.uebPort', { port: r.port })); }
     const was = neuWerte.length === 2 ? t('hosts.host.uebZwei', { a: neuWerte[0], b: neuWerte[1] }) : neuWerte[0];
-    adrHinweis.textContent = was ? t('hosts.host.uebernommen', { was }) : t('hosts.host.adresseHinweis');
+    adrHinweisSetzen(was ? t('hosts.host.uebernommen', { was }) : t('hosts.host.adresseHinweis'));
     namePlatzhalter();
     zusammenfassen();
   };
@@ -444,8 +478,9 @@ App.hostBearbeiten = function (h) {
       return null;
     }
     if (/[\s/@]/.test(adresse)) {
-      f.adresse.setAttribute('aria-invalid', 'true');
-      fehlerZeigen(t('hosts.host.fehlerAdresseZeichen'));
+      const text = t(/\s/.test(adresse) ? 'hosts.host.fehlerAdresseLeerzeichen' : 'hosts.host.fehlerAdresseZeichen');
+      adrHinweisSetzen(text, true);
+      fehlerZeigen(text);
       f.adresse.focus();
       return null;
     }

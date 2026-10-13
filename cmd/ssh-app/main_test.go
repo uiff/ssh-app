@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/x509"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,5 +45,25 @@ func TestDatenordnerPruefen(t *testing.T) {
 	defer os.Chmod(verz, 0o700)
 	if err := datenordnerPruefen(verz); err == nil || !strings.Contains(err.Error(), "nicht beschreibbar") || !strings.Contains(err.Error(), "chown") {
 		t.Fatalf("Meldung: %v", err)
+	}
+}
+
+// Das eigene Zertifikat traegt den Produktnamen und bleibt beim zweiten Start dasselbe.
+func TestSelbstsigniertKeyway(t *testing.T) {
+	verz := filepath.Join(t.TempDir(), "tls")
+	c, fp, err := selbstsigniert(verz)
+	if err != nil || fp == "" {
+		t.Fatalf("%q %v", fp, err)
+	}
+	z, err := x509.ParseCertificate(c.Certificate[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Sprachneutral: erscheint in der Zertifikatswarnung des Browsers, auch fuer englische Anwender.
+	if z.Subject.CommonName != "Keyway" || len(z.Subject.Organization) != 1 || z.Subject.Organization[0] != "Keyway (self-signed)" {
+		t.Fatalf("Name: %+v", z.Subject)
+	}
+	if _, fp2, err := selbstsigniert(verz); err != nil || fp2 != fp {
+		t.Fatalf("zweiter Start: %q %v", fp2, err)
 	}
 }

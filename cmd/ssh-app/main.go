@@ -1,4 +1,4 @@
-// ssh-app: Web-SSH-Client mit Tresor, Dateileiste und Befehlshilfe.
+// Keyway (Binary ssh-app): Web-SSH-Client mit Tresor, Dateileiste und Befehlshilfe.
 package main
 
 import (
@@ -33,7 +33,7 @@ import (
 	"github.com/uiff/ssh-app/internal/vault"
 )
 
-var version = "0.1.0"
+var version = "0.2.0"
 
 func env(k, standard string) string {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {
@@ -134,7 +134,7 @@ func main() {
 		if tlsCfg != nil {
 			ziel = "https"
 		}
-		log.Printf("ssh-app %s läuft auf %s://%s", version, ziel, anzeigeAdresse(adresse))
+		log.Printf("Keyway %s läuft auf %s://%s", version, ziel, anzeigeAdresse(adresse))
 		if tlsCfg != nil {
 			err = hs.ListenAndServeTLS("", "")
 		} else {
@@ -152,6 +152,9 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	hs.Shutdown(ctx)
+	// Laufendes Einsetzen hochgeladener Dateien zu Ende bringen, bevor die Sitzungen schliessen
+	// (hs.Shutdown wartet nur 5 s auf laufende Anfragen). compose.yml: stop_grace_period 30s.
+	srv.EinsetzenAbwarten("", 20*time.Second)
 	srv.Close()
 	tm.Close()
 	st.Close()
@@ -170,7 +173,7 @@ func datenordnerPruefen(daten string) error {
 	}
 	f, err := os.CreateTemp(daten, ".schreibprobe-*")
 	if err != nil {
-		return fmt.Errorf("Datenordner %s ist nicht beschreibbar (die App läuft als Benutzer %d) — bei einem Host-Ordner statt Volume: sudo chown %d:%d <ordner> (%v)",
+		return fmt.Errorf("Datenordner %s ist nicht beschreibbar (Keyway läuft als Benutzer %d) — bei einem Host-Ordner statt Volume: sudo chown %d:%d <ordner> (%v)",
 			daten, os.Getuid(), os.Getuid(), os.Getgid(), err)
 	}
 	f.Close()
@@ -196,7 +199,7 @@ func netzListe(s string) ([]netip.Prefix, error) {
 		if strings.Contains(t, "/") {
 			p, err := netip.ParsePrefix(t)
 			if err != nil {
-				return nil, fmt.Errorf("«%s» ist kein Netz (z.B. 172.16.0.0/12)", t)
+				return nil, fmt.Errorf("«%s» ist kein Netz (z. B. 172.16.0.0/12)", t)
 			}
 			out = append(out, p.Masked())
 			continue
@@ -244,9 +247,11 @@ func selbstsigniert(verz string) (tls.Certificate, string, error) {
 	}
 	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 120))
 	host, _ := os.Hostname()
+	// Der Name erscheint in der Zertifikatswarnung des Browsers, in jeder Sprache: darum
+	// sprachneutral. Ein vorhandenes cert.pem bleibt (gleicher Fingerabdruck), auch mit altem Namen.
 	vorlage := &x509.Certificate{
 		SerialNumber: serial,
-		Subject:      pkix.Name{CommonName: "ssh-app", Organization: []string{"ssh-app (selbst signiert)"}},
+		Subject:      pkix.Name{CommonName: "Keyway", Organization: []string{"Keyway (self-signed)"}},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().AddDate(10, 0, 0),
 		KeyUsage:     x509.KeyUsageDigitalSignature,

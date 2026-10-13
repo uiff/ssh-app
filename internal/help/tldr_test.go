@@ -162,7 +162,14 @@ func TestErklaerenZweisprachig(t *testing.T) {
 	if !strings.Contains(teile[2].Erklaerung, "--directory — Beispiel: Extrahiere") {
 		t.Fatalf("-C aus Optionsplatzhalter: %+v", teile[2])
 	}
-	if teile[1].Erklaerung != "nicht in den Beispielen — man tar" {
+	// Gebuendelte Kurzschalter ueber die Merkhilfen: die deutsche Seite hat keine, also das
+	// deutsche Wort im selben Beispiel, wenn es eindeutig ist (gleicher Wortstamm, oder ein
+	// Synonym in mindestens zwei Beispielen); sonst die englische Merkhilfe mit Herkunft.
+	// Hier belegt nur ein Beispiel «gzip» zu «g[z]ipped» (die echte Seite hat zwei).
+	if teile[1].Erklaerung != "-x: E[x]trahiere · -z: g[z]ipped (englische Seite) · -f: [f]ile (englische Seite)" {
+		t.Fatalf("Buendel deutsch: %+v", teile[1])
+	}
+	if _, teile, _ = ix.Erklaeren("tar -q", "de"); teile[1].Erklaerung != "nicht in den Beispielen — siehe man tar" {
 		t.Fatalf("unbekannter Schalter muss ehrlich sein: %+v", teile[1])
 	}
 	s, teile, ok = ix.Erklaeren("ls | tar -xzf a.tgz -C /tmp", "en")
@@ -172,12 +179,18 @@ func TestErklaerenZweisprachig(t *testing.T) {
 	if !strings.Contains(teile[2].Erklaerung, "--directory — example: E[x]tract") {
 		t.Fatalf("-C englisch: %+v", teile[2])
 	}
-	if teile[1].Erklaerung != "not in the examples — see man tar" {
+	if teile[1].Erklaerung != "-x: E[x]tract · -z: g[z]ipped · -f: [f]ile" {
+		t.Fatalf("Buendel englisch: %+v", teile[1])
+	}
+	if _, teile, _ = ix.Erklaeren("tar -xzqf", "en"); teile[1].Erklaerung != "-x: E[x]tract · -z: g[z]ipped · -q: see man tar · -f: [f]ile" {
+		t.Fatalf("unbekannter Buchstabe im Buendel faellt nicht weg: %+v", teile[1])
+	}
+	if _, teile, _ = ix.Erklaeren("tar -q", "en"); teile[1].Erklaerung != "not in the examples — see man tar" {
 		t.Fatalf("unbekannter Schalter englisch: %+v", teile[1])
 	}
 	// Seite nur auf Englisch, Oberflaeche deutsch: Beispieltext englisch, eigener Hinweis deutsch.
 	s, teile, _ = ix.Erklaeren("find . -size +5M -xdev", "de")
-	if s.Sprache != "en" || teile[1].Erklaerung != "Find files larger than a size" || teile[2].Erklaerung != "nicht in den Beispielen — man find" {
+	if s.Sprache != "en" || teile[1].Erklaerung != "Find files larger than a size" || teile[2].Erklaerung != "nicht in den Beispielen — siehe man find" {
 		t.Fatalf("%+v", teile)
 	}
 	if _, _, ok := ix.Erklaeren("unbekannt -x", "en"); ok {

@@ -1,6 +1,9 @@
 'use strict';
 // Hauptprogramm: Einrichtung, Anmeldung, Arbeitsplatz, Tabs, Telefon-Tasten.
 
+// Sichtbarer Produktname (Eigenname, in beiden Sprachen gleich). Intern heisst die App weiter
+// ssh-app (Modul, Programm, Kopf X-SSH-App, localStorage sshapp.*, Backup-Format).
+const MARKE = 'Keyway';
 const IOTUELI = 'https://iotueli.ch';
 const telefonAbfrage = window.matchMedia('(max-width: 899px)');
 
@@ -10,6 +13,8 @@ App.aktiv = null;
 App.daten = { ordner: [], hosts: [], zugaenge: [], snippets: [], bekannt: [] };
 App.status = {};
 App.rundfunk = false;
+App.rundfunkEingabe = { text: '', frei: false }; // was seit dem letzten Zeilenende an alle Tabs ging
+App.rundfunkHalt = null; // offene Rueckfrage: kritische Tabs, die das Zeilenende noch nicht bekommen haben
 App.mod = { ctrl: false, alt: false };
 
 // Anzeige der Tab-Zustaende (die internen Namen sind Bezeichner, keine Texte).
@@ -29,13 +34,31 @@ App.schriftGroesse = () => lokal('schrift', App.istTelefon() ? 13 : 14);
 App.schriftSetzen = (n) => {
   if (!(n >= 9 && n <= 24)) return;
   lokalSetzen('schrift', n);
+  if (App.seitenleiste && App.koerper) seitenZeichnen(); // groessere Schrift braucht mehr Platz
   for (const tt of App.tabs) { tt.term.options.fontSize = n; tt.anpassen(); }
 };
 
-function logoLink(hoehe) {
-  return el('a', { class: 'logo-link', href: IOTUELI, target: '_blank', rel: 'noopener', title: 'IoTUeli — iotueli.ch' },
-    el('img', { src: 'img/iotueli.svg', alt: 'IoTUeli', style: { height: hoehe + 'px' } }));
+// Symbol von Keyway (Schluesselloch mit Prompt, wie img/keyway.svg) als Inline-SVG: Es folgt der
+// Akzentfarbe, der Prompt hat die Farbe des Grundes, auf dem es steht (--marke-grund).
+function keywaySymbol(hoehe) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const s = document.createElementNS(ns, 'svg');
+  s.setAttribute('viewBox', '19 7 26 49');
+  s.setAttribute('class', 'keyway-symbol');
+  s.setAttribute('aria-hidden', 'true');
+  s.setAttribute('height', String(hoehe));
+  s.setAttribute('width', String(Math.round(hoehe * 26 / 49)));
+  const loch = document.createElementNS(ns, 'path');
+  loch.setAttribute('class', 'loch');
+  loch.setAttribute('d', 'M32 9a11 11 0 0 1 6.6 19.8L43 54H21l4.4-25.2A11 11 0 0 1 32 9z');
+  const prompt = document.createElementNS(ns, 'path');
+  prompt.setAttribute('class', 'prompt');
+  prompt.setAttribute('d', 'M26.5 35.5l5 4-5 4M33 47.5h6');
+  s.append(loch, prompt);
+  return s;
 }
+App.keywaySymbol = keywaySymbol;
+// «Keyway · by IoTUeli», IoTUeli verlinkt.
 function erstelltVon() {
   return el('span', null, tTeile('app.erstelltVon', { marke: el('a', { href: IOTUELI, target: '_blank', rel: 'noopener' }, 'IoTUeli') }));
 }
@@ -46,6 +69,7 @@ function hoeheAnpassen() {
   const h = vv ? vv.height : window.innerHeight;
   document.documentElement.style.setProperty('--app-hoehe', h + 'px');
   if (vv && vv.offsetTop) window.scrollTo(0, 0);
+  if (App.seitenleiste && App.koerper) seitenZeichnen(); // Breite geaendert: Platz fuer das Terminal neu verteilen
   if (App.aktiv) App.aktiv.anpassen();
 }
 if (window.visualViewport) window.visualViewport.addEventListener('resize', hoeheAnpassen);
@@ -63,7 +87,10 @@ App.starten = async function () {
   App.tabs = [];
   App.daten = { ordner: [], hosts: [], zugaenge: [], snippets: [], bekannt: [] };
   App.rundfunk = false;
-  App.seitenleiste = null; App.dateien = null; App.hilfe = null; App.start = null; App.tabsLeiste = null; App.blattEbene = null;
+  App.rundfunkEingabe = { text: '', frei: false };
+  App.rundfunkHalt = null;
+  App.seitenleiste = null; App.dateien = null; App.hilfe = null; App.start = null; App.tabsLeiste = null; App.blattEbene = null; App.groesseAnzeige = null;
+  App.koerper = null; App.linksSchwebend = false; App.linksEingeklappt = false;
   App.modSetzen('ctrl', false); App.modSetzen('alt', false);
   try { App.status = await api('GET', '/api/status'); }
   catch (e) {
@@ -90,7 +117,7 @@ function einstiegRahmen(formular, mitSprache) {
   return el('div', { class: 'einstieg' },
     mitSprache ? App.sprachUmschalter('oben') : null,
     el('div', { class: 'einstieg-bild' },
-      logoLink(40),
+      el('div', { class: 'marke-gross' }, keywaySymbol(44), el('span', null, MARKE)),
       el('div', { class: 'platz', style: { flex: 1 } }),
       el('div', { class: 'term-deko', 'aria-hidden': 'true' }, t('app.einstieg.deko')),
       el('h1', null, t('app.einstieg.titel')),
@@ -136,14 +163,27 @@ function einrichtenSeite() {
   if (!App.istTelefon()) p1.focus();
 }
 
+// Zeitpunkt als «2026-10-12 22:05» (ISO, Ortszeit): in beiden Sprachen eindeutig.
+function isoZeit(d) {
+  const z = (n) => String(n).padStart(2, '0');
+  return d.getFullYear() + '-' + z(d.getMonth() + 1) + '-' + z(d.getDate()) + ' ' + z(d.getHours()) + ':' + z(d.getMinutes());
+}
+
+// Sicherheitsschluessel zum Abschreiben: Umbruch nur zwischen den Vierergruppen (nach dem Bindestrich),
+// nie mitten in einer Gruppe. <wbr> erscheint beim Kopieren nicht.
+function schluesselGruppen(schluessel) {
+  const teile = String(schluessel).split('-');
+  return teile.map((g, i) => (i < teile.length - 1 ? [g + '-', el('wbr')] : g));
+}
+
 function sicherheitsschluesselSeite(schluessel, benutzer) {
   const ok = el('input', { type: 'checkbox', onchange: () => { weiter.disabled = !ok.checked; } });
   const weiter = el('button', { class: 'btn primaer voll', type: 'button', disabled: true, onclick: () => App.starten() }, t('app.schluessel.weiter'));
-  const datei = t('app.schluessel.datei', { benutzer, zeit: new Date().toLocaleString(lokalCode()), adresse: location.origin, schluessel });
+  const datei = t('app.schluessel.datei', { benutzer, zeit: isoZeit(new Date()), adresse: location.origin, schluessel });
   const inhalt = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '18px' } },
     el('h2', null, t('app.schluessel.titel')),
     el('p', { class: 'unter' }, t('app.schluessel.text')),
-    el('div', { class: 'schluessel-box', 'aria-label': t('app.schluessel.name') }, schluessel),
+    el('div', { class: 'schluessel-box', 'aria-label': t('app.schluessel.name') }, schluesselGruppen(schluessel)),
     el('div', { class: 'reihe' },
       el('button', { class: 'btn', type: 'button', onclick: () => kopieren(schluessel) }, icon('kopieren'), t('app.schluessel.kopieren')),
       el('button', { class: 'btn', type: 'button', onclick: () => textDatei(t('app.schluessel.dateiname'), datei) }, icon('runter'), t('app.schluessel.speichern'))),
@@ -220,6 +260,7 @@ async function arbeitsplatz() {
     dateien: !App.istTelefon() && lokal('seiteDateien', false),
     hilfe: !App.istTelefon() && lokal('seiteHilfe', false),
   };
+  App.leisteZuletzt = lokal('seiteZuletzt', 'dateien');
   App.seitenleiste = new App.Seitenleiste();
   App.dateien = new App.Dateien();
   App.hilfe = new App.HilfeLeiste();
@@ -231,16 +272,22 @@ async function arbeitsplatz() {
   App.tabWahl = el('button', { class: 'tab-wahl nur-telefon', type: 'button', onclick: (e) => tabMenue(e.currentTarget) });
   App.statusleiste = el('div', { class: 'statusleiste' });
   App.rundfunkBand = el('div', { class: 'rundfunk versteckt' });
-  App.schleier = el('div', { class: 'schleier versteckt', style: { zIndex: 35 }, onclick: () => { for (const n of ['links', 'dateien', 'hilfe']) App.seiteUmschalten(n, false); } });
+  App.schleier = el('div', { class: 'schleier versteckt', style: { zIndex: 35 }, onclick: () => App.blaetterZu() });
   App.knoepfe = {
+    // Telefon: Hosts-Blatt. Desktop: nur sichtbar, wenn die Host-Leiste aus Platzgruenden eingeklappt
+    // ist; dann oeffnet er sie schwebend ueber dem Terminal.
+    links: ikonKnopf('menue', t('app.kopf.hosts'), () => {
+      if (App.istTelefon()) App.seiteUmschalten('links');
+      else { App.linksSchwebend = !App.linksSchwebend; seitenZeichnen(); }
+    }, { class: 'ikon links-knopf' }),
     dateien: ikonKnopf('ordner', t('app.kopf.dateien'), () => App.seiteUmschalten('dateien')),
     hilfe: ikonKnopf('hilfe', t('app.kopf.hilfe'), () => App.seiteUmschalten('hilfe')),
-    rundfunk: ikonKnopf('funk', t('app.kopf.rundfunk'), () => App.rundfunkSetzen(!App.rundfunk), { class: 'ikon nur-desktop' }),
+    rundfunk: ikonKnopf('funk', t('app.rundfunk.an'), () => App.rundfunkSetzen(!App.rundfunk), { class: 'ikon nur-desktop', 'aria-pressed': 'false' }),
   };
 
-  const kopf = el('header', { class: 'kopf' },
-    ikonKnopf('menue', t('app.kopf.hosts'), () => App.seiteUmschalten('links'), { class: 'ikon nur-telefon' }),
-    el('div', { class: 'marke nur-desktop' }, logoLink(24), el('span', { class: 'trenner' }), el('span', { class: 'name' }, 'SSH-App')),
+  App.kopf = el('header', { class: 'kopf' },
+    App.knoepfe.links,
+    el('div', { class: 'marke nur-desktop' }, keywaySymbol(26), el('span', { class: 'name' }, MARKE)),
     App.tabWahl,
     el('button', { class: 'btn klein primaer nur-desktop', type: 'button', style: { marginLeft: '16px' }, onclick: () => App.palette('') }, icon('plus'), t('app.kopf.neu')),
     el('div', { class: 'platz nur-desktop' }),
@@ -252,8 +299,8 @@ async function arbeitsplatz() {
   const tasten = telefonTasten();
   const mitte = el('main', { class: 'mitte' }, App.tabsLeiste, App.terms, App.statusleiste, tasten);
   App.terms.append(App.start);
-  const koerper = el('div', { class: 'koerper' }, App.seitenleiste.element, App.dateien.element, mitte, App.hilfe.element, App.schleier);
-  ersetzen(document.getElementById('app'), kopf, App.rundfunkBand, koerper);
+  App.koerper = el('div', { class: 'koerper' }, App.seitenleiste.element, App.dateien.element, mitte, App.hilfe.element, App.schleier);
+  ersetzen(document.getElementById('app'), App.kopf, App.rundfunkBand, App.koerper);
   seitenZeichnen();
 
   // Laufende Sitzungen wieder anhaengen (Neuladen, Telefon-Wechsel).
@@ -273,11 +320,17 @@ App.datenLaden = async function () {
 };
 
 App.seiteUmschalten = function (n, an, nurTelefon) {
-  if (nurTelefon && !App.istTelefon()) return;
+  if (nurTelefon && !App.istTelefon()) {
+    // Desktop: Die schwebende Host-Leiste schliesst wie ein Blatt (Host gewaehlt, Palette geoeffnet).
+    if (n === 'links' && an === false && App.linksSchwebend) { App.linksSchwebend = false; seitenZeichnen(); }
+    return;
+  }
   const neu = an === undefined ? !App.seiten[n] : an;
   if (App.istTelefon() && neu) for (const k of Object.keys(App.seiten)) App.seiten[k] = false;
   App.seiten[n] = neu;
   if (!App.istTelefon()) lokalSetzen('seite' + n[0].toUpperCase() + n.slice(1), neu);
+  // Die zuletzt geoeffnete von Dateien und Befehlshilfe bleibt offen, wenn nur eine Platz hat (platzVerteilen).
+  if (neu && (n === 'dateien' || n === 'hilfe')) { App.leisteZuletzt = n; lokalSetzen('seiteZuletzt', n); }
   seitenZeichnen();
   if (n === 'dateien' && neu) App.dateien.fuerTab(App.aktiv);
   if (n === 'hilfe' && neu && App.aktiv) App.hilfe.zeile(App.aktiv.aktuelleZeile());
@@ -291,17 +344,71 @@ function seitenZeichnen() {
   App.hilfe.element.classList.toggle('versteckt', !App.seiten.hilfe);
   App.knoepfe.dateien.classList.toggle('an', App.seiten.dateien);
   App.knoepfe.hilfe.classList.toggle('an', App.seiten.hilfe);
-  const blatt = App.istTelefon() && (App.seiten.links || App.seiten.dateien || App.seiten.hilfe);
+  platzVerteilen();
+  const blatt = App.istTelefon() ? (App.seiten.links || App.seiten.dateien || App.seiten.hilfe) : App.linksSchwebend;
   App.schleier.classList.toggle('versteckt', !blatt);
   // Telefon: Ein offenes Blatt ist eine Ebene — die Zurueck-Geste schliesst es.
   if (blatt && !App.blattEbene) App.blattEbene = ebeneAuf(() => App.blaetterZu());
   else if (!blatt && App.blattEbene) { ebeneZu(App.blattEbene); App.blattEbene = null; }
 }
-// Telefon: alle Blaetter zu, damit das Terminal frei liegt.
+// Telefon: alle Blaetter zu, damit das Terminal frei liegt. Desktop: die schwebende Host-Leiste zu.
 App.blaetterZu = function () {
   if (!App.seitenleiste) return;
+  if (App.linksSchwebend) { App.linksSchwebend = false; seitenZeichnen(); }
   for (const n of ['links', 'dateien', 'hilfe']) if (App.seiten[n]) App.seiteUmschalten(n, false, true);
 };
+
+// ---------- Platz fuer das Terminal (Desktop) ----------
+// Das Terminal behaelt mindestens TERM_MIN_SPALTEN Spalten, und keine Leiste liegt darueber.
+// Passen Dateien und Befehlshilfe nicht beide neben das Terminal, schliessen sie sich gegenseitig:
+// Die zuletzt geoeffnete bleibt angedockt, die andere geht zu (auch beim Verkleinern des Fensters).
+// Reicht die Breite danach nicht fuer die Host-Leiste, klappt sie ein (der Knopf «Hosts und Tresor»
+// im Kopf oeffnet sie dann schwebend, mit Schleier wie ein Blatt); die gemerkte Wahl bleibt, wird das
+// Fenster breiter, steht sie wieder da. Reicht es selbst fuer eine Leiste nicht auf 60 Spalten (sehr
+// grosse Schrift), bleibt sie trotzdem angedockt und das Terminal wird schmaler.
+const TERM_MIN_SPALTEN = 60;
+// Zeichenbreite des Terminals, gemessen wie xterm (measureText): Mit Font-Hinting (Linux) ganze Pixel
+// (8 bei 14 px), ohne (macOS) gebrochene (8,4). Eine feste Annahme liesse dort nur 58 statt 60 Spalten.
+let zellenMesser = null;
+function zellenBreite() {
+  const groesse = App.schriftGroesse();
+  try {
+    if (!zellenMesser) zellenMesser = (typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(1, 1) : document.createElement('canvas')).getContext('2d');
+    const familie = (App.aktiv && App.aktiv.term && App.aktiv.term.options.fontFamily) || '"JBMono", ui-monospace, Menlo, monospace';
+    zellenMesser.font = groesse + 'px ' + familie;
+    const b = zellenMesser.measureText('W').width;
+    if (b > 0) return b;
+  } catch (e) { /* leer */ }
+  return 0.6 * groesse; // JetBrains Mono: 0,6 em je Zeichen
+}
+function terminalMindestbreite() {
+  // Dazu der Innenabstand des Terminals (14 px) und Platz fuer die Bildlaufleiste.
+  return Math.ceil(TERM_MIN_SPALTEN * zellenBreite()) + 14 + 12;
+}
+function platzVerteilen() {
+  const leisten = { links: App.seitenleiste.element, dateien: App.dateien.element, hilfe: App.hilfe.element };
+  for (const e of Object.values(leisten)) e.classList.remove('eingeklappt', 'schwebend');
+  let eingeklappt = false;
+  if (!App.istTelefon() && App.koerper) {
+    const breite = (n) => (App.seiten[n] ? leisten[n].getBoundingClientRect().width : 0);
+    const min = terminalMindestbreite();
+    const gesamt = App.koerper.clientWidth;
+    if (App.seiten.dateien && App.seiten.hilfe && gesamt - breite('dateien') - breite('hilfe') < min) {
+      const zu = App.leisteZuletzt === 'dateien' ? 'hilfe' : 'dateien';
+      App.seiten[zu] = false;
+      lokalSetzen(zu === 'dateien' ? 'seiteDateien' : 'seiteHilfe', false);
+      leisten[zu].classList.add('versteckt');
+      App.knoepfe[zu].classList.remove('an');
+    }
+    const frei = gesamt - breite('links') - breite('dateien') - breite('hilfe');
+    eingeklappt = frei < min && App.seiten.links && (App.seiten.dateien || App.seiten.hilfe);
+  }
+  if (!eingeklappt) App.linksSchwebend = false;
+  if (eingeklappt) leisten.links.classList.add(App.linksSchwebend ? 'schwebend' : 'eingeklappt');
+  App.linksEingeklappt = eingeklappt;
+  if (App.kopf) App.kopf.classList.toggle('links-eingeklappt', eingeklappt);
+  App.knoepfe.links.classList.toggle('an', !!App.linksSchwebend);
+}
 telefonAbfrage.addEventListener('change', () => { if (App.seitenleiste) { App.seiten.links = !App.istTelefon(); seitenZeichnen(); App.tabsZeichnen(); } });
 
 function hauptMenue(anker) {
@@ -310,7 +417,7 @@ function hauptMenue(anker) {
   const andere = SPRACHEN.find((s) => s.id !== I18N.sprache) || SPRACHEN[0];
   menue(anker, [
     App.istTelefon() ? { text: t('app.menue.suchen'), icon: 'suche', aktion: () => App.palette('') } : null,
-    App.istTelefon() && App.offeneTabs().length > 1 ? { text: App.rundfunk ? t('app.menue.rundfunkAus') : t('app.menue.rundfunkAn'), icon: 'funk', aktion: () => App.rundfunkSetzen(!App.rundfunk) } : null,
+    App.istTelefon() && App.offeneTabs().length > 1 ? { text: App.rundfunk ? t('app.rundfunk.aus') : t('app.rundfunk.an'), icon: 'funk', aktion: () => App.rundfunkSetzen(!App.rundfunk) } : null,
     App.istTelefon() ? { text: t('app.menue.schriftGroesser'), icon: 'schrift', aktion: () => App.schriftSetzen(App.schriftGroesse() + 1) } : null,
     App.istTelefon() ? { text: t('app.menue.schriftKleiner'), icon: 'schrift', aktion: () => App.schriftSetzen(App.schriftGroesse() - 1) } : null,
     { text: t('app.menue.einstellungen'), icon: 'zahnrad', aktion: () => App.einstellungen() },
@@ -387,6 +494,9 @@ App.tabSchliessen = async function (tab) {
 function tabHost(tt) { return App.daten.hosts.find((x) => x.id === tt.hostId); }
 
 App.tabsZeichnen = function () {
+  // Tastenleiste (Telefon) nur, wenn ein Terminal verbunden ist — auf der Startseite stoert sie.
+  const leiste = document.querySelector('.tasten');
+  if (leiste) leiste.classList.toggle('ohne-terminal', !(App.aktiv && App.aktiv.zustand === 'bereit'));
   if (!App.tabsLeiste) return;
   ersetzen(App.tabsLeiste,
     ...App.tabs.map((tt) => el('div', { class: 'tab' + (tt === App.aktiv ? ' aktiv' : ''), role: 'tab', 'aria-selected': tt === App.aktiv ? 'true' : 'false', title: tt.titel + ' — ' + App.zustandText(tt.zustand) },
@@ -397,8 +507,8 @@ App.tabsZeichnen = function () {
   // Telefon: Titel des aktiven Tabs als Auswahl
   const tt = App.aktiv;
   ersetzen(App.tabWahl,
-    tt ? hostSymbol(tabHost(tt), 18, tt.zustand) : null,
-    el('span', { class: 't' }, tt ? tt.titel : 'SSH-App'),
+    tt ? hostSymbol(tabHost(tt), 18, tt.zustand) : keywaySymbol(22),
+    el('span', { class: 't' }, tt ? tt.titel : MARKE),
     tt && tt.zustand !== 'bereit' ? el('span', { class: 'sr' }, App.zustandText(tt.zustand)) : null,
     App.tabs.length > 1 ? el('span', { class: 'chip' }, String(App.tabs.length)) : null,
     icon('pfeilRunter', 14));
@@ -408,10 +518,12 @@ App.tabsZeichnen = function () {
     ersetzen(App.statusleiste,
       el('span', { class: 'zustand z-' + tt.zustand }, el('span', { class: 'hsym-punkt', 'aria-hidden': 'true' }), App.zustandText(tt.zustand)),
       h ? el('span', { class: 'geraet' }, geraetIcon(h.geraet, 14), geraetName(h.geraet)) : null,
-      h ? el('span', null, hostZeile(h)) : null,
-      tt.fingerprint ? el('span', null, tt.fingerprint) : null,
-      el('span', null, tt.term.cols + ' × ' + tt.term.rows));
-  } else ersetzen(App.statusleiste, el('span', null, t('app.keineSitzung')));
+      // Adresse und Fingerabdruck kuerzen sich bei wenig Breite (…), Zustand und Groesse bleiben ganz.
+      h ? el('span', { class: 'kuerzbar', title: hostZeile(h) }, hostZeile(h)) : null,
+      tt.fingerprint ? el('span', { class: 'kuerzbar', title: tt.fingerprint }, tt.fingerprint) : null,
+      App.groesseAnzeige = el('span', null, tt.term.cols + ' × ' + tt.term.rows));
+  } else { App.groesseAnzeige = null; ersetzen(App.statusleiste, el('span', null, t('app.keineSitzung'))); }
+  if (App.rundfunk) rundfunkBandZeichnen();
   // Punkte der verbundenen Hosts nachfuehren, ohne ein Filterfeld beim Tippen zu stoeren.
   if (App.seitenleiste && App.seitenleiste.reiter === 'hosts' && !App.seitenleiste.element.contains(document.activeElement)) App.seitenleiste.zeichnen();
 };
@@ -443,7 +555,7 @@ function startZeichnen() {
     el('div', { class: 'reihe' },
       el('button', { class: 'btn primaer', type: 'button', onclick: () => App.hostBearbeiten({}) }, icon('plus'), t('app.start.hostAnlegen')),
       el('button', { class: 'btn', type: 'button', onclick: () => App.zugangBearbeiten({}) }, icon('schluessel'), t('app.start.zugangAnlegen')),
-      el('button', { class: 'btn', type: 'button', onclick: () => App.palette() }, icon('hilfe'), t('app.start.hilfe'))),
+      el('button', { class: 'btn', type: 'button', onclick: () => App.palette() }, icon('hilfe'), t('app.kopf.hilfe'))),
     el('p', { style: { marginTop: 'auto', fontSize: '13px', color: 'var(--leise)' } }, erstelltVon()));
 }
 
@@ -494,8 +606,8 @@ App.anmeldungFragen = function (n, tab) {
     const d = dialog({
       titel: t('app.login.titel', { ziel: n.ziel }),
       inhalt: el('form', { onsubmit: (e) => { e.preventDefault(); los(); }, style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
-        el('div', { class: 'feld' }, el('label', { for: 'f-b' }, t('app.login.benutzer')), b),
-        el('div', { class: 'feld' }, el('label', { for: 'f-p' }, t('app.login.passwort')), p),
+        el('div', { class: 'feld' }, el('label', { for: 'f-b' }, t('app.feld.benutzer')), b),
+        el('div', { class: 'feld' }, el('label', { for: 'f-p' }, t('app.feld.passwort')), p),
         el('label', { class: 'check', for: 'f-speichern' }, merken,
           el('span', null, t('app.login.speichern'), el('br'),
             el('span', { style: { color: 'var(--leise)', fontSize: '13px' } }, t('app.login.speichernHinweis')))),
@@ -510,25 +622,35 @@ App.anmeldungFragen = function (n, tab) {
 
 // ---------- Befehle einfuegen ----------
 
-function aktiverHost() { return App.aktiv && App.daten.hosts.find((h) => h.id === App.aktiv.hostId); }
 // Tag «kritisch» (deutsch) oder «critical» (englisch): Rueckfrage vor gefaehrlichen Befehlen.
 const KRITISCH_TAGS = ['kritisch', 'critical'];
 function istKritisch(h) { return !!h && (h.tags || []).some((tt) => KRITISCH_TAGS.includes(String(tt).trim().toLowerCase())); }
+// Kritische Hosts dieser Tabs, jeder Host einmal.
+function kritischeHosts(tabs) {
+  const aus = [];
+  for (const tt of tabs) { const h = tabHost(tt); if (istKritisch(h) && !aus.includes(h)) aus.push(h); }
+  return aus;
+}
+function hostNamen(hosts) { return hosts.map((h) => h.name).join(', '); }
 
+// Einfuegen aus Snippet oder Befehlshilfe. Die Rueckfrage gilt fuer jeden kritischen Host, auf dem der
+// Befehl ankommt: dem aktiven Tab und mit «An alle senden» jedem verbundenen Tab.
 // opt.zeileErsetzen: die schon getippte Eingabe ersetzen (Beispiel aus der Hilfe zur aktuellen Zeile),
 // statt den Befehl an «tar» anzuhaengen («tartar -xf …»).
 App.befehlEinfuegen = async function (text, opt) {
   const o = opt || {};
   const tt = App.aktiv;
   if (!tt || tt.zustand !== 'bereit') { toast(t('app.keineSitzungVerbunden'), 'fehler'); return; }
-  const h = aktiverHost();
-  if (istGefaehrlich(text) && istKritisch(h)) {
-    if (!(await frage(t('app.gefahr.frage', { name: h.name }), { titel: t('app.gefahr.titel'), ja: t('app.gefahr.trotzdem'), gefahr: true, befehl: text }))) return;
+  const kritisch = istGefaehrlich(text) ? kritischeHosts(App.rundfunk ? App.tabs.filter((x) => x.zustand === 'bereit') : [tt]) : [];
+  if (kritisch.length) {
+    const text1 = kritisch.length === 1 ? t('app.gefahr.frage', { name: kritisch[0].name }) : t('app.gefahr.frageMehrere', { namen: hostNamen(kritisch) });
+    if (!(await frage(text1, { titel: t('app.gefahr.titel'), ja: t('app.gefahr.trotzdem'), gefahr: true, befehl: text }))) return;
     if (App.aktiv !== tt || tt.zustand !== 'bereit') return; // inzwischen gewechselt oder getrennt
   }
   App.blaetterZu();
   if (o.zeileErsetzen && tt.aktuelleZeile()) tt.tippen('\x05\x15'); // ans Zeilenende, dann die Zeile leeren (readline)
-  tt.einfuegen(text);
+  // bestaetigt: Die Zeile ist freigegeben, Enter fragt mit «An alle senden» nicht noch einmal.
+  tt.einfuegen(text, { bestaetigt: kritisch.length > 0 });
 };
 
 App.befehlVorbereiten = function (befehl, titel, opt) {
@@ -577,29 +699,125 @@ App.hilfeBeiEingabe = function (tab) {
 // ---------- An alle senden ----------
 
 App.rundfunkSetzen = function (an) {
-  const andere = App.offeneTabs().filter((tt) => tt.zustand === 'bereit');
-  if (an && andere.length < 2) { toast(t('app.rundfunk.zuWenig'), 'fehler'); return; }
+  const bereit = App.offeneTabs().filter((tt) => tt.zustand === 'bereit');
+  if (an && bereit.length < 2) { toast(t('app.rundfunk.zuWenig'), 'fehler'); return; }
+  if (an !== App.rundfunk) App.rundfunkEingabe = { text: '', frei: false };
   App.rundfunk = an;
-  App.knoepfe.rundfunk.classList.toggle('an', an);
+  const k = App.knoepfe.rundfunk;
+  k.classList.toggle('an', an);
+  k.setAttribute('aria-pressed', an ? 'true' : 'false');
+  k.title = an ? t('app.rundfunk.aus') : t('app.rundfunk.an');
   App.rundfunkBand.classList.toggle('versteckt', !an);
-  ersetzen(App.rundfunkBand, icon('funk'), el('span', { style: { flex: 1 } }, t('app.rundfunk.band', { n: andere.length, namen: andere.map((tt) => tt.titel).join(', ') })),
-    el('button', { class: 'btn klein', type: 'button', onclick: () => App.rundfunkSetzen(false) }, t('app.rundfunk.beenden')));
+  if (an) rundfunkBandZeichnen(); else ersetzen(App.rundfunkBand);
   setTimeout(() => App.aktiv && App.aktiv.anpassen(), 20);
 };
-App.rundfunkSenden = function (von, d) {
-  // Einfuegen aus xterm kommt bei Bracketed Paste geklammert — jeder Ziel-Tab nach seinem eigenen Modus.
+// Band «Eingaben gehen an …»: nennt die Tabs, die gerade verbunden sind (nach jedem Zustandswechsel neu).
+// Bleibt hoechstens ein offener Tab uebrig, endet «An alle senden».
+function rundfunkBandZeichnen() {
+  if (App.offeneTabs().length < 2) { App.rundfunkSetzen(false); return; }
+  const bereit = App.offeneTabs().filter((tt) => tt.zustand === 'bereit');
+  const namen = bereit.map((tt) => tt.titel).join(', ');
+  ersetzen(App.rundfunkBand, icon('funk'),
+    el('span', { style: { flex: 1, minWidth: 0 } }, bereit.length === 1 ? t('app.rundfunk.band1', { namen }) : t('app.rundfunk.band', { n: bereit.length, namen })),
+    el('button', { class: 'btn klein', type: 'button', onclick: () => App.rundfunkSetzen(false) }, t('app.rundfunk.beenden')));
+}
+
+// Getippt oder eingefuegt mit «An alle senden»: Die Zeichen gehen sofort an alle verbundenen Tabs. Erst
+// ein Zeilenende fuehrt aus — dann prueft Keyway die Zeile. Ist sie gefaehrlich, bekommen die kritischen
+// Hosts das Zeilenende (bzw. die eingefuegten Zeilen) erst nach der Rueckfrage; die anderen Tabs fuehren
+// sofort aus. Abgelehnt: Dort wird die Zeile geleert (Strg+E, Strg+U), damit auch ein spaeteres Enter
+// sie nicht ausfuehrt. Der aktive Tab ist das Terminal, in das man selbst tippt: wie ohne «An alle senden»
+// ohne Rueckfrage.
+// von: aktiver Tab. d: Daten wie von xterm (Einfuegen bei Bracketed Paste geklammert — jeder Ziel-Tab
+// bekommt sie nach seinem eigenen Modus). bestaetigt: schon nachgefragt (Snippet, Befehlshilfe).
+// Muss vor von.startMerken(d) laufen: Die Pruefung liest die Zeile des aktiven Tabs.
+App.rundfunkSenden = function (von, d, bestaetigt) {
   const geklammert = d.startsWith('\x1b[200~') && d.endsWith('\x1b[201~');
-  const roh = geklammert ? d.slice(6, -6) : d;
-  for (const tt of App.tabs) if (tt !== von && tt.zustand === 'bereit') tt.sendenRoh(kodierer.encode(geklammert ? tt.geklammert(roh) : d));
+  const teil = { d, roh: geklammert ? d.slice(6, -6) : d, geklammert };
+  const ziele = App.tabs.filter((tt) => tt !== von && tt.zustand === 'bereit');
+  const zeilen = eingabeNachfuehren(App.rundfunkEingabe, teil.roh, bestaetigt);
+  if (zeilen.length && !App.rundfunkHalt) {
+    // Nur Tabs an der Eingabezeile: In einem Vollbildprogramm (vi, top) fuehrt Enter keinen Befehl aus.
+    const kritisch = ziele.filter((tt) => istKritisch(tabHost(tt)) && tt.term.buffer.active.type === 'normal');
+    const gefaehrlich = kritisch.length ? gefaehrlicheZeile(zeilen, teil.roh, [von, ...kritisch]) : null;
+    if (gefaehrlich !== null) rundfunkHalten(kritisch, gefaehrlich);
+  }
+  const h = App.rundfunkHalt;
+  let gehalten = false;
+  for (const tt of ziele) {
+    if (h && h.tabs.includes(tt)) gehalten = true;
+    else rundfunkAn(tt, teil);
+  }
+  if (gehalten) h.warte.push(teil);
 };
+function rundfunkAn(tt, teil) {
+  tt.startMerken(teil.roh);
+  tt.sendenRoh(kodierer.encode(teil.geklammert ? tt.geklammert(teil.roh) : teil.d));
+}
+
+// Fuehrt die gemeinsame Eingabezeile nach (wie readline am Zeilenende) und liefert die Zeilen, die ein
+// Zeilenende in s ausfuehren wuerde. Steuerfolgen (Pfeile, Verlauf) zaehlen nicht als Text; was sie
+// auf den Bildschirm bringen, liest gefaehrlicheZeile aus den Terminals selbst.
+function eingabeNachfuehren(e, s, frei) {
+  if (frei) e.frei = true;
+  const zeilen = [];
+  for (let i = 0; i < s.length; i++) {
+    const c = s[i];
+    if (c === '\r' || c === '\n') {
+      zeilen.push({ text: e.text, frei: e.frei });
+      e.text = ''; e.frei = !!frei;
+      if (c === '\r' && s[i + 1] === '\n') i++;
+    } else if (c === '\x1b') {
+      if (s[i + 1] === '[' || s[i + 1] === 'O') { i += 2; while (i < s.length && !/[@-~]/.test(s[i])) i++; } else i++;
+    } else if (c === '\x7f' || c === '\b') e.text = e.text.slice(0, -1);
+    else if (c === '\x17') e.text = e.text.replace(/\S*\s*$/, ''); // Strg+W: Wort zurueck
+    else if (c === '\x15') e.text = ''; // Strg+U
+    else if (c === '\x03') { e.text = ''; e.frei = false; } // Strg+C: Zeile verworfen
+    else if (c >= ' ') e.text += c;
+  }
+  return zeilen;
+}
+
+// Die erste gefaehrliche Zeile, die das Zeilenende ausfuehren wuerde, sonst null. Geprueft wird die
+// mitgefuehrte Eingabe und, fuer die erste Zeile, was in den Terminals selbst auf der Eingabezeile steht
+// (Verlauf mit Pfeil hoch, Reste von frueher) samt dem Text vor dem Zeilenende.
+function gefaehrlicheZeile(zeilen, roh, tabs) {
+  const kandidaten = zeilen.filter((z) => !z.frei).map((z) => z.text);
+  if (!zeilen[0].frei) {
+    const vorEnde = roh.split(/[\r\n]/)[0].replace(/\x1b(\[[0-?]*[ -/]*[@-~]|O.|.)?/g, '').replace(/[\x00-\x1f\x7f]/g, '');
+    for (const tt of tabs) kandidaten.push(tt.aktuelleZeile() + vorEnde);
+  }
+  const z = kandidaten.find((k) => istGefaehrlich(k));
+  return z === undefined ? null : z.trim();
+}
+
+function rundfunkHalten(tabs, zeile) {
+  const h = { tabs, warte: [] };
+  App.rundfunkHalt = h;
+  const namen = hostNamen(kritischeHosts(tabs));
+  frage(t('app.rundfunk.zeileFrage', { namen }),
+    { titel: t('app.gefahr.titel'), ja: t('app.rundfunk.zeileAusfuehren'), nein: t('app.rundfunk.zeileVerwerfen'), gefahr: true, befehl: zeile })
+    .then((ok) => {
+      if (App.rundfunkHalt === h) App.rundfunkHalt = null;
+      // Nur Tabs, die noch da und verbunden sind (nicht nach Abmelden oder Schliessen).
+      const noch = h.tabs.filter((tt) => App.tabs.includes(tt) && tt.zustand === 'bereit');
+      for (const tt of noch) {
+        if (ok) for (const teil of h.warte) rundfunkAn(tt, teil);
+        else tt.sendenRoh(kodierer.encode('\x05\x15'));
+      }
+      if (!ok && noch.length) toast(t('app.rundfunk.zeileVerworfen', { namen: hostNamen(kritischeHosts(noch)) }));
+    });
+}
 App.anAlleSenden = async function (text) {
   const ziele = App.tabs.filter((tt) => tt.zustand === 'bereit');
-  const kritisch = ziele.map((tt) => App.daten.hosts.find((h) => h.id === tt.hostId)).filter(istKritisch);
+  const kritisch = kritischeHosts(ziele);
   const gefahr = istGefaehrlich(text);
   let frageText = t('app.rundfunk.frage', { n: ziele.length, namen: ziele.map((tt) => tt.titel).join(', ') });
-  if (gefahr && kritisch.length) frageText = t('app.rundfunk.gefahr', { namen: kritisch.map((h) => h.name).join(', ') }) + '\n\n' + frageText;
-  if (!(await frage(frageText, { titel: t('app.rundfunk.titel'), ja: t('app.befehl.einfuegen'), gefahr, befehl: text }))) return;
-  // nurHier: jeder Tab genau einmal, auch wenn «An alle senden» gerade an ist.
+  if (gefahr && kritisch.length) frageText = t('app.rundfunk.gefahr', { namen: hostNamen(kritisch) }) + '\n\n' + frageText;
+  if (!(await frage(frageText, { titel: t('app.rundfunk.an'), ja: t('app.befehl.einfuegen'), gefahr, befehl: text }))) return;
+  // nurHier: jeder Tab genau einmal, auch wenn «An alle senden» gerade an ist. Die gemeinsame Zeile
+  // traegt den Text dann auch (nach Nachfrage freigegeben: Enter fragt nicht noch einmal).
+  if (App.rundfunk) eingabeNachfuehren(App.rundfunkEingabe, text, gefahr && kritisch.length > 0);
   for (const tt of ziele) if (tt.zustand === 'bereit') tt.einfuegen(text, { nurHier: true, ohneFokus: tt !== App.aktiv });
 };
 
@@ -648,8 +866,8 @@ function telefonTasten() {
   return el('div', { class: 'tasten', role: 'toolbar', 'aria-label': t('app.tasten.name') },
     taste('Esc', senden('\x1b')),
     taste('Tab', senden('\t')),
-    taste('Ctrl', () => App.modSetzen('ctrl', !App.mod.ctrl), { attrs: { 'data-mod': 'ctrl', 'aria-pressed': 'false' } }),
-    taste('Alt', () => App.modSetzen('alt', !App.mod.alt), { attrs: { 'data-mod': 'alt', 'aria-pressed': 'false' } }),
+    taste(t('app.tasten.strgTaste'), () => App.modSetzen('ctrl', !App.mod.ctrl), { label: t('app.tasten.strg'), attrs: { 'data-mod': 'ctrl', 'aria-pressed': 'false' } }),
+    taste('Alt', () => App.modSetzen('alt', !App.mod.alt), { label: t('app.tasten.alt'), attrs: { 'data-mod': 'alt', 'aria-pressed': 'false' } }),
     taste('^C', senden('\x03'), { label: t('app.tasten.strgC') }),
     el('span', { class: 'trenn' }),
     taste('', pfeil('\x1b[D', '\x1bOD'), { icon: 'pfeilLinks', label: t('app.tasten.links') }),

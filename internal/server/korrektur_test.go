@@ -242,7 +242,7 @@ func TestZugangsdatenNurNachErfolgSpeichern(t *testing.T) {
 		return d.Hosts[0], d.Zugaenge
 	}
 
-	if n := verbinden("pi", "falsch", true); n.T != "fehler" || !strings.HasPrefix(n.Text, "Anmeldung abgelehnt") {
+	if n := verbinden("pi", "falsch", true); n.T != "fehler" || !strings.HasPrefix(n.Text, "Anmeldung am Host abgelehnt") {
 		t.Fatalf("falsches Passwort: %+v", n)
 	}
 	if host, zs := daten(); host.ZugangID != 0 || len(zs) != 0 || host.Benutzer != "" {

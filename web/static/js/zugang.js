@@ -148,6 +148,23 @@ App.snippetBearbeiten = function (s) {
 
 // ---------- Einstellungen ----------
 
+// Keyway-Zeichen (Schluesselloch mit Prompt, wie img/keyway.svg) als Inline-SVG: das Loch folgt
+// der Akzentfarbe (Farben in hosts.css, .ueber-zeichen).
+function ueberZeichen(groesse) {
+  const ns = 'http://www.w3.org/2000/svg';
+  const s = document.createElementNS(ns, 'svg');
+  s.setAttribute('viewBox', '0 0 64 64');
+  s.setAttribute('width', groesse);
+  s.setAttribute('height', groesse);
+  s.setAttribute('class', 'ueber-zeichen');
+  s.setAttribute('aria-hidden', 'true');
+  const teil = (art, attr) => { const e = document.createElementNS(ns, art); for (const k in attr) e.setAttribute(k, attr[k]); s.append(e); };
+  teil('rect', { class: 'grund', x: 0.5, y: 0.5, width: 63, height: 63, rx: 14 });
+  teil('path', { class: 'loch', d: 'M32 9a11 11 0 0 1 6.6 19.8L43 54H21l4.4-25.2A11 11 0 0 1 32 9z' });
+  teil('path', { class: 'prompt', d: 'M26.5 35.5l5 4-5 4M33 47.5h6' });
+  return s;
+}
+
 App.einstellungen = function () {
   const st = App.status;
   const alt = el('input', { id: 'e-alt', type: 'password', autocomplete: 'current-password' });
@@ -207,7 +224,9 @@ App.einstellungen = function () {
         bekannt),
       el('div', { class: 'einstellungen-gruppe' },
         el('h4', null, t('hosts.einst.ueber')),
-        el('p', null, tTeile('hosts.einst.version', { version: st.version || '', hersteller: el('a', { href: 'https://iotueli.ch', target: '_blank', rel: 'noopener' }, 'IoTUeli') })),
+        el('div', { class: 'ueber-marke' }, ueberZeichen(48),
+          el('div', { class: 'ueber-name' }, el('b', null, MARKE),
+            el('span', null, tTeile('hosts.einst.version', { version: st.version || '–', hersteller: el('a', { href: 'https://iotueli.ch', target: '_blank', rel: 'noopener' }, 'IoTUeli') })))),
         el('p', null, tTeile('hosts.einst.verwendet', { quelle: tldrQuelle(false, true) })),
         el('div', null, el('a', { class: 'btn klein', href: 'vendor/licenses/', target: '_blank', rel: 'noopener' }, t('hosts.einst.lizenzen'))))),
   });

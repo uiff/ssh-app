@@ -233,16 +233,17 @@ document.addEventListener('keydown', (e) => {
 }, true);
 
 // Rueckfrage. befehl (optional) steht abgesetzt in Festbreitenschrift unter dem Text.
-function frage(text, { titel = t('basis.bestaetigen'), ja = t('basis.ok'), gefahr = false, befehl } = {}) {
+// nein: Text des Knopfs, der ablehnt (wie Schliessen und Escape); Vorgabe «Abbrechen».
+function frage(text, { titel = t('basis.bestaetigen'), ja = t('basis.ok'), nein = t('basis.abbrechen'), gefahr = false, befehl } = {}) {
   return new Promise((resolve) => {
     let ergebnis = false;
     const d = dialog({
       titel,
       inhalt: el('div', { style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
         el('p', { class: 'frage-text' }, text),
-        befehl ? el('div', { class: 'befehl-gross' }, befehl) : null),
+        befehl ? el('div', { class: 'befehl-gross' }, befehlWoerter(befehl)) : null),
       knoepfe: [
-        el('button', { class: 'btn', type: 'button', onclick: () => d.zu() }, t('basis.abbrechen')),
+        el('button', { class: 'btn', type: 'button', onclick: () => d.zu() }, nein),
         el('button', { class: 'btn ' + (gefahr ? 'gefahr' : 'primaer'), type: 'button', onclick: () => { ergebnis = true; d.zu(); } }, ja),
       ],
       beimSchliessen: () => resolve(ergebnis),
@@ -375,19 +376,24 @@ function optionenAufloesen(befehl) {
 function befehlFuellen(befehl, werte) {
   return optionenAufloesen(befehl).replace(/\{\{(.+?)\}\}/g, (m, n) => (werte[n] !== undefined && werte[n] !== '' ? werte[n] : n));
 }
-function befehlAnzeige(befehl) {
+// Befehl zum Lesen (Befehlshilfe, Palette, Rueckfragen): Jedes Wort steht in einem eigenen Kasten
+// (.wort, app.css). So bricht die Zeile nur an Leerzeichen um, nie mitten in einem Schalter wie
+// «--strip-components=1» — Chrome bricht sonst nach jedem Bindestrich um. Nur ein Wort, das allein
+// nicht in die Zeile passt (langer Pfad), bricht in sich um. Mit mitPlatzhaltern werden {{name}}
+// hervorgehoben und gehoeren zu ihrem Wort, auch wenn sie Leerzeichen enthalten.
+function befehlWoerter(text, mitPlatzhaltern) {
   const frag = document.createDocumentFragment();
-  const b = optionenAufloesen(befehl);
-  let rest = b;
-  const re = /\{\{(.+?)\}\}/;
-  while (rest) {
-    const m = re.exec(rest);
-    if (!m) { frag.append(rest); break; }
-    frag.append(rest.slice(0, m.index), el('span', { class: 'ph' }, m[1]));
-    rest = rest.slice(m.index + m[0].length);
+  const teile = String(text || '').match(mitPlatzhaltern ? /\{\{.+?\}\}|\s+|[^\s{]+|\{/g : /\s+|\S+/g) || [];
+  let wort = null;
+  for (const s of teile) {
+    if (/^\s+$/.test(s)) { frag.append(s); wort = null; continue; }
+    if (!wort) { wort = el('span', { class: 'wort' }); frag.append(wort); }
+    const m = mitPlatzhaltern ? /^\{\{(.+)\}\}$/.exec(s) : null;
+    wort.append(m ? el('span', { class: 'ph' }, m[1]) : s);
   }
   return frag;
 }
+function befehlAnzeige(befehl) { return befehlWoerter(optionenAufloesen(befehl), true); }
 
 // Erkennung gefaehrlicher Befehle (Rueckfrage bei Hosts mit Tag «kritisch»/«critical»). Prueft jeden Teil einer
 // Befehlskette einzeln und laesst Vorsilben wie sudo, doas, env, nohup oder VAR=wert weg.

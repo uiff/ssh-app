@@ -1,4 +1,5 @@
-# ssh-app starten:   docker compose up -d --build
+# Keyway (Dienst, Image und Container heissen weiterhin «ssh-app») starten:
+#   docker compose up -d --build
 # Danach im Browser: https://<adresse-dieses-rechners>:8443 — und gleich einrichten:
 # bis dahin kann jeder, der die Adresse erreicht, das Konto anlegen.
 services:
@@ -22,7 +23,8 @@ services:
       # SSHAPP_TLS: "aus"
       # SSHAPP_COOKIE_SECURE: "1"
       # SSHAPP_PROXY: "172.16.0.0/12"
-    stop_grace_period: 10s
+    # Beim Stoppen wartet Keyway bis 25 s, bis eine hochgeladene Datei fertig eingesetzt ist
+    stop_grace_period: 30s
     read_only: true
     tmpfs:
       - /tmp

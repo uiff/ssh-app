@@ -1,6 +1,7 @@
-SSH-App (ssh-app)
+Keyway by IoTUeli (repository and program still named "ssh-app")
 Copyright (c) 2026 IoTUeli (https://iotueli.ch). MIT License, see LICENSE.
-The name and logo "IoTUeli" are trademarks of IoTUeli and are not covered by the MIT License.
+The names and logos "Keyway" and "IoTUeli" are trademarks of IoTUeli and are not covered by
+the MIT License.
 
 The license texts of the third-party software are in web/static/vendor/licenses/ and are
 embedded in the program: in the app under Settings > About > Licenses (path /vendor/licenses/,
@@ -80,6 +81,8 @@ Data
   from a pinned commit of the tldr repository (TLDR_COMMIT in the Dockerfile) and packed,
   together with the license file LICENSE.md, into tldr-pages.en.zip and tldr-pages.de.zip.
   Text: tldr-pages.LICENSE (this LICENSE.md unmodified, preceded by one line about its origin)
+  The source tree also contains a few unmodified tldr pages in internal/help/testdata/tldr
+  (same license and copyright). They are used only by the tests and are not part of the program.
 
 After updating the Go libraries, update this list and the license texts. The modules that end
 up in the program are listed by:

@@ -49,6 +49,17 @@ function hilfeText(text) {
 
 const KOPF_STIL = { fontSize: '11px', fontWeight: 600, letterSpacing: '.06em', color: 'var(--leise)', textTransform: 'uppercase' };
 
+// Suchtreffer aus der anderen Sprache (Rueckfall auf die englische bzw. deutsche Seite):
+// dezentes Kuerzel «EN»/«DE» neben dem Befehlsnamen, ausgeschrieben fuer Vorlesen und Tooltip.
+const MARKE_STIL = { display: 'inline-block', marginLeft: '6px', padding: '0 4px', border: '1px solid var(--linie2)', borderRadius: '4px',
+  fontSize: '10px', fontWeight: 600, letterSpacing: '.04em', lineHeight: '15px', verticalAlign: '1px' };
+function sprachMarke(seitenSprache) {
+  if (!seitenSprache || seitenSprache === I18N.sprache) return null;
+  const voll = t('hilfe.quelle.sprache', { sprache: t('hilfe.sprache.' + seitenSprache) });
+  return el('span', { class: 'sprachmarke', style: MARKE_STIL, title: voll },
+    el('span', { 'aria-hidden': 'true' }, t('hilfe.sprache.kurz.' + seitenSprache)), el('span', { class: 'sr' }, voll));
+}
+
 class HilfeLeiste {
   constructor() {
     this.titelCode = el('code', { style: { color: 'var(--akzent)', fontWeight: 400 } });
@@ -101,12 +112,24 @@ class HilfeLeiste {
       el('div', { lang: r.seite.sprache, style: { fontSize: '14px', color: 'var(--text2)', lineHeight: 1.5 } }, hilfeText(r.seite.beschreibung)),
       teile.length ? el('div', { class: 'erklaerung' },
         el('div', { class: 'kopfzeile' }, t('hilfe.erklaert')),
-        teile.map((x) => el('div', { class: 'teil' }, el('code', null, x.wort), el('span', null, hilfeText(x.erklaerung))))) : null,
+        teile.map((x) => el('div', { class: 'teil' }, el('code', null, x.wort), erklaerungText(x.erklaerung)))) : null,
       el('div', { class: 'kopfzeile', style: KOPF_STIL }, t('hilfe.beispiele')),
       el('div', { lang: r.seite.sprache, style: { display: 'flex', flexDirection: 'column', gap: '14px' } }, r.seite.beispiele.map((b) => beispielZeile(b))),
       el('p', { class: 'quelle' }, tldrQuelle(r.seite.sprache),
         r.seite.mehr ? [' · ', el('a', { href: r.seite.mehr, target: '_blank', rel: 'noopener noreferrer' }, t('hilfe.handbuch'))] : null));
   }
+}
+
+// Erklaerung eines Wortes. Ein Schalterbuendel («-xzf») kommt vom Server als «-x: … · -z: … · -f: …»:
+// dann jeder Buchstabe auf einer eigenen Zeile, der Schalter in Schreibmaschinenschrift.
+const BUENDEL_RE = /^(-?[A-Za-z0-9]): (.+)$/s;
+function erklaerungText(text) {
+  const stuecke = String(text || '').split(' · ');
+  if (stuecke.length < 2 || !stuecke.every((s) => BUENDEL_RE.test(s))) return el('span', null, hilfeText(text));
+  return el('span', { class: 'zeilen' }, stuecke.map((s) => {
+    const [, schalter, rest] = BUENDEL_RE.exec(s);
+    return el('span', null, el('code', null, schalter), ': ', hilfeText(rest));
+  }));
 }
 
 // Ohne beiWahl (Hilfe zur aktuellen Zeile) ersetzt «Nehmen» die schon getippte Eingabe.
@@ -204,7 +227,7 @@ class Palette {
     const kinder = [];
     this.treffer.forEach((x, i) => {
       if (x.art !== letzte) { kinder.push(el('div', { class: 'gruppe-titel' }, gruppen[x.art])); letzte = x.art; }
-      let titel, unter, q, symbol = null, lang = null;
+      let titel, unter, q, symbol = null, lang = null, marke = null;
       if (x.art === 'host') {
         const tab = App.tabs.find((y) => y.hostId === x.host.id && y.zustand === 'bereit');
         titel = x.host.name; unter = hostZeile(x.host); q = t(tab ? 'hilfe.host.verbunden' : 'hilfe.host.verbinden');
@@ -213,10 +236,11 @@ class Palette {
       else {
         titel = hilfeText(x.t.beispiel ? x.t.beispiel.text : x.t.beschreibung); unter = x.t.beispiel ? optionenAufloesen(x.t.beispiel.befehl) : x.t.name; q = x.t.name;
         lang = x.t.sprache || null;
+        marke = sprachMarke(x.t.sprache);
       }
       kinder.push(el('button', { class: 'treffer' + (i === this.wahl ? ' aktiv' : ''), type: 'button', role: 'option', 'aria-selected': i === this.wahl ? 'true' : 'false',
         onclick: () => { this.wahl = i; this.zeichnen(); this.ausfuehrenOderZeigen(true); } },
-        symbol, el('span', { class: 'haupt' }, el('span', { lang }, titel), el('code', null, unter)), el('span', { class: 'q' }, q)));
+        symbol, el('span', { class: 'haupt' }, el('span', { lang }, titel), el('code', null, unter)), el('span', { class: 'q' }, q, marke)));
     });
     ersetzen(this.liste, ...kinder);
     // Desktop: Detail daneben mitzeigen — ohne den Fokus aus dem Suchfeld zu nehmen.
@@ -283,7 +307,7 @@ class Palette {
       ersetzen(gross);
       const fertig = befehlFuellen(befehl, werte);
       if (namen.some((n) => !werte[n])) gross.append(befehlAnzeige(befehl.replace(/\{\{(.+?)\}\}/g, (m, n) => werte[n] ? werte[n] : m)));
-      else gross.append(fertig);
+      else gross.append(befehlWoerter(fertig));
     };
     const felder = namen.map((n) => {
       const id = 'ph-' + Math.random().toString(36).slice(2);

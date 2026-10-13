@@ -54,7 +54,7 @@ func TestHTTPFehlerInDerSpracheDerAnfrage(t *testing.T) {
 	if code, text := rufeMit(t, c, "PUT", "/api/hosts/999", `{"adresse":"10.0.0.1"}`, englisch); code != 404 || text != "Entry not found" {
 		t.Fatalf("unbekannter Host englisch: %d %q", code, text)
 	}
-	if code, text := rufeMit(t, c, "POST", "/api/hosts", `kein json`, englisch); code != 400 || text != "The request is not valid JSON" {
+	if code, text := rufeMit(t, c, "POST", "/api/hosts", `kein json`, englisch); code != 400 || text != "The request isn’t valid JSON" {
 		t.Fatalf("JSON englisch: %d %q", code, text)
 	}
 	if code, text := rufeMit(t, c, "POST", "/api/hosts", host, map[string]string{"X-SSH-App": "", "X-SSH-App-Sprache": "en"}); code != 403 || text != "Request rejected: app header missing" {
@@ -69,8 +69,8 @@ func TestHTTPFehlerInDerSpracheDerAnfrage(t *testing.T) {
 		want   string
 	}{
 		{nil, "Benutzername oder Passwort ist falsch"},
-		{englisch, "Incorrect user name or password"},
-		{map[string]string{"Accept-Language": "en-US,en;q=0.9,de;q=0.5"}, "Incorrect user name or password"},
+		{englisch, "Incorrect username or password"},
+		{map[string]string{"Accept-Language": "en-US,en;q=0.9,de;q=0.5"}, "Incorrect username or password"},
 		{map[string]string{"X-SSH-App-Sprache": "de", "Accept-Language": "en-US"}, "Benutzername oder Passwort ist falsch"},
 	} {
 		if code, text := rufeMit(t, c, "POST", "/api/anmelden", falsch, f.koepfe); code != 401 || text != f.want {
@@ -119,7 +119,7 @@ func TestWebSocketInDerSpracheDesBrowsers(t *testing.T) {
 	h := hostAnlegen(t, c, addr, true, nil)
 	ws := wsOeffnen(t, ts, c, fmt.Sprintf("host=%d&sprache=en", h.ID))
 	n := naechste(t, ws)
-	if n.T != "status" || n.Text != "Connecting to "+addr+" …" {
+	if n.T != "status" || n.Text != "Connecting to "+addr+"…" {
 		t.Fatalf("Status englisch: %+v", n)
 	}
 	if n = naechste(t, ws); n.T != "fehler" || n.Text != "Connection refused — is an SSH server running on "+addr+"?" {
@@ -147,13 +147,13 @@ func TestWebSocketInDerSpracheDesBrowsers(t *testing.T) {
 			}
 		}
 	}
-	if n := rueckfrage("&sprache=en", nachricht{T: "anmeldung", Benutzer: "pi", Passwort: "falsch"}); n.T != "fehler" || n.Text != "Sign-in rejected — check the user, password, or key" {
+	if n := rueckfrage("&sprache=en", nachricht{T: "anmeldung", Benutzer: "pi", Passwort: "falsch"}); n.T != "fehler" || n.Text != "Login rejected — check the username, password, or key" {
 		t.Fatalf("falsches Passwort englisch: %+v", n)
 	}
-	if n := rueckfrage("", nachricht{T: "anmeldung", Abbrechen: true}); n.T != "fehler" || n.Text != "Anmeldung abgebrochen — «Neu\u00a0verbinden», um es erneut zu versuchen." {
+	if n := rueckfrage("", nachricht{T: "anmeldung", Abbrechen: true}); n.T != "fehler" || n.Text != "Anmeldung am Host abgebrochen — «Neu\u00a0verbinden», um es erneut zu versuchen." {
 		t.Fatalf("Abbruch deutsch: %+v", n)
 	}
-	if n := rueckfrage("&sprache=en", nachricht{T: "anmeldung", Abbrechen: true}); n.T != "fehler" || n.Text != "Sign-in canceled — choose “Reconnect” to try again." {
+	if n := rueckfrage("&sprache=en", nachricht{T: "anmeldung", Abbrechen: true}); n.T != "fehler" || n.Text != "Login canceled — choose “Reconnect” to try again." {
 		t.Fatalf("Abbruch englisch: %+v", n)
 	}
 
@@ -163,7 +163,7 @@ func TestWebSocketInDerSpracheDesBrowsers(t *testing.T) {
 	ws4 := wsOeffnen(t, ts, c, "sitzung="+bereit.ID+"&sprache=en")
 	liesNachricht(t, ws4, "bereit")
 	ws4.Write(context.Background(), websocket.MessageBinary, []byte("exit\r"))
-	if n := liesNachricht(t, ws4, "ende"); n.Text != "Signed out" {
+	if n := liesNachricht(t, ws4, "ende"); n.Text != "Session ended (shell exited)" {
 		t.Fatalf("Ende englisch: %+v", n)
 	}
 	var liste []struct{ ID, Grund string }
@@ -175,7 +175,7 @@ func TestWebSocketInDerSpracheDesBrowsers(t *testing.T) {
 	}
 	json.NewDecoder(res.Body).Decode(&liste)
 	res.Body.Close()
-	if len(liste) != 1 || liste[0].Grund != "Signed out" {
+	if len(liste) != 1 || liste[0].Grund != "Session ended (shell exited)" {
 		t.Fatalf("Sitzungsliste englisch: %+v", liste)
 	}
 	ws5 := wsOeffnen(t, ts, c, "sitzung=gibtsnicht&sprache=en")

@@ -116,7 +116,67 @@ func TestHilfeSprache(t *testing.T) {
 		t.Fatalf("Erklaeren en: %+v", e)
 	}
 	hilfeAnfrage(t, s.hilfeErklaeren, "/api/hilfe/erklaeren?zeile="+"tar+-C+%2Ftmp+-q", "de", "", &e)
-	if e.Seite.Sprache != "de" || !strings.HasPrefix(e.Teile[1].Erklaerung, "--directory — Beispiel:") || e.Teile[2].Erklaerung != "nicht in den Beispielen — man tar" {
+	if e.Seite.Sprache != "de" || !strings.HasPrefix(e.Teile[1].Erklaerung, "--directory — Beispiel:") || e.Teile[2].Erklaerung != "nicht in den Beispielen — siehe man tar" {
 		t.Fatalf("Erklaeren de: %+v", e)
+	}
+}
+
+// Buendel wie «tar -xzf» erklaert der Server je Sprache der Oberflaeche (Kopf X-SSH-App-Sprache),
+// mit den unveraenderten tldr-Seiten aus internal/help/testdata/tldr.
+func TestHilfeKurzschalterJeSprache(t *testing.T) {
+	verz := t.TempDir()
+	for _, sprache := range []string{"de", "en"} {
+		wurzel := filepath.Join("..", "help", "testdata", "tldr", sprache)
+		f, err := os.Create(filepath.Join(verz, "tldr-pages."+sprache+".zip"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		w := zip.NewWriter(f)
+		err = filepath.WalkDir(wurzel, func(p string, d os.DirEntry, err error) error {
+			if err != nil || d.IsDir() {
+				return err
+			}
+			b, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			rel, _ := filepath.Rel(wurzel, p)
+			x, err := w.Create(filepath.ToSlash(rel))
+			if err != nil {
+				return err
+			}
+			_, err = x.Write(b)
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Close()
+		f.Close()
+	}
+	ix, err := help.Laden(verz)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{hilfe: ix}
+	for _, f := range []struct{ sprache, erklaerung string }{
+		{"en", "-x: E[x]tract · -z: g[z]ipped · -f: [f]ile"},
+		{"de", "-x: E[x]trahiere · -z: g[z]ip · -f: [f]ile (englische Seite)"},
+	} {
+		var e struct {
+			Gefunden bool        `json:"gefunden"`
+			Seite    help.Seite  `json:"seite"`
+			Teile    []help.Teil `json:"teile"`
+		}
+		hilfeAnfrage(t, s.hilfeErklaeren, "/api/hilfe/erklaeren?zeile=tar+-xzf+a.tar.gz", f.sprache, "", &e)
+		gefunden := ""
+		for _, teil := range e.Teile {
+			if teil.Wort == "-xzf" {
+				gefunden = teil.Erklaerung
+			}
+		}
+		if !e.Gefunden || e.Seite.Sprache != f.sprache || gefunden != f.erklaerung {
+			t.Errorf("%s: %q (Seite %q), erwartet %q", f.sprache, gefunden, e.Seite.Sprache, f.erklaerung)
+		}
 	}
 }

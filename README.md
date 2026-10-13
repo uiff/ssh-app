@@ -1,31 +1,36 @@
 <p align="right"><a href="README.md"><b>English</b></a> | <a href="README.de.md">Deutsch</a></p>
 
 <p align="center">
-  <img src="web/static/img/icon.svg" width="72" height="72" alt="">
+  <img src="web/static/img/keyway.svg" width="64" alt="">
 </p>
 
-<h1 align="center">SSH-App</h1>
+<h1 align="center">Keyway</h1>
 
 <p align="center">
-  A self-hosted web SSH client: terminal, files and command help in one browser tab, on the desktop and on your phone.
+  by <a href="https://iotueli.ch">IoTUeli</a>
 </p>
 
 <p align="center">
-  <a href="https://iotueli.ch"><img src="web/static/img/iotueli.svg" height="32" alt="IoTUeli"></a><br>
-  <sub>Made by <a href="https://iotueli.ch">IoTUeli</a></sub>
+  A self-hosted web SSH client: terminal, files, and command help in one browser tab, on the desktop and on your phone.
 </p>
 
-![SSH-App on the desktop: a terminal session with the Files panel and the command help open](docs/bilder/en/desktop-arbeitsplatz.png)
+<p align="center">
+  <img src="docs/bilder/en/desktop-arbeitsplatz.png" width="100%" alt="Keyway on the desktop: hosts sorted into folders, the Files panel, a terminal session, and the command help, which explains each option of tar -xzf">
+</p>
 
-Think MobaXterm, but in the browser. SSH-App runs as a single container on your own hardware, with no cloud service and
+Think MobaXterm, but in the browser. Keyway runs as a single container on your own hardware, with no cloud service and
 no third-party account. The interface is available in English and German.
+
+> **About the name:** Keyway used to be called SSH-App. The repository, the program, and the container are still called
+> `ssh-app`, and the settings still start with `SSHAPP_`. Existing installations, data folders, and backups keep working
+> unchanged.
 
 ## Features
 
 ### Terminal
 
-- **Terminal in the browser:** tabs, 256 colors, full-screen programs (`top`, `htop`, `vi`), clickable links, copy and
-  paste (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>).
+- **Terminal in the browser:** tabs, 256 colors, full-screen programs (`top`, `htop`, `vi`), clickable links, and copy
+  and paste (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>V</kbd>).
 - **Sessions survive:** sessions keep running on the server for up to 12 hours with no window open. After a reload or a
   dropped connection they reattach on their own, with the previous screen content. If you open the same session in a
   second window, the first one steps aside and can take it back with one click.
@@ -34,31 +39,36 @@ no third-party account. The interface is available in English and German.
 - **Host keys:** on the first connection the app asks you to confirm the host key, and it warns you clearly if the key
   changes later. Known host keys are listed in Settings, where you can remove them.
 - **Send to all:** type into several sessions at once.
-- **Critical hosts:** for hosts tagged `critical` (or `kritisch`), the app asks for confirmation before a dangerous command such as
-  `rm -rf`, `dd` or `reboot` goes in from a snippet, the command help or Send to all.
+- **Critical hosts:** for hosts tagged `critical` (or `kritisch`), the app asks for confirmation before a dangerous
+  command such as `rm -rf`, `dd`, or `reboot` goes in from a snippet, the command help, or Send to all. When you type
+  with Send to all, the tab you type in runs the line as usual, a dangerous line waits for your confirmation on the
+  other critical hosts, and the remaining tabs run it right away.
 
 ### Hosts with device types
 
-![Host dialog: device type picker with icons, then name, address, user and password](docs/bilder/en/desktop-host-dialog.png)
+<p align="center">
+  <img src="docs/bilder/en/desktop-host-dialog.png" width="80%" alt="Add host dialog: device types with icons in the groups Industrial, Computers, Network, and Other, below them name, address, username, and password">
+</p>
 
 - **Device types with icons:** each host gets a symbol, for example PLC, HMI/panel, gateway, IoT device, wallbox,
-  inverter, server, virtual machine, container, PC, laptop, Raspberry Pi, router, switch, firewall, NAS, cloud/VPS or
+  inverter, server, virtual machine, container, PC, laptop, Raspberry Pi, router, switch, firewall, NAS, cloud/VPS, or
   printer. You can recognize your machines at a glance in the list.
-- **Simple host dialog:** you only see device type, name, address, user, password and folder. The address field also
-  takes `user@host:port`, `ssh://…`, `ssh -p 2222 user@host` or `[fe80::1]:2222` and fills in user and port for you.
-  Port, key or vault credential, tags, color, note and “Files panel follows the terminal” are under **Advanced**.
-- **Folders, tags, colors and notes.** The filter above the list searches names, addresses, users, device types and tags.
-  If exactly one host matches, <kbd>Enter</kbd> connects.
+- **Simple host dialog:** you only see device type, name, address, username, password, and folder. The address field
+  also takes `user@host:port`, `ssh://…`, `ssh -p 2222 user@host`, or `[fe80::1]:2222` and fills in username and port
+  for you. Port, key or vault credential, tags, color, note, and “Files panel follows the terminal” are under
+  **Advanced**.
+- **Folders, tags, colors, and notes.** The filter above the list searches names, addresses, usernames, device types,
+  and tags. If exactly one host matches, <kbd>Enter</kbd> connects.
 
 ### Vault and credentials
 
 - **Save password:** with “Save password” ticked in the host dialog, the app stores the password as an encrypted
-  credential in the vault. Without it, the app asks for user and password when you connect, and can save them there
-  after a successful sign-in.
-- **Vault:** credentials (a user with a password or a private key) are encrypted with AES-256-GCM, using a key derived
-  from your sign-in password with Argon2id. Import keys, generate new ones (ed25519) and install the public key on a host
-  with one click (it is appended to `~/.ssh/authorized_keys`). Several hosts can share one credential, so a new password
-  only has to be changed in one place.
+  credential in the vault. Without it, the app asks for username and password when you connect, and can save them there
+  once the host has accepted them.
+- **Vault:** credentials (a username with a password or a private key) are encrypted with AES-256-GCM, using a key derived
+  from your sign-in password with Argon2id. Import keys, generate new ones (ed25519), and install the public key on a
+  host with one click (it is appended to `~/.ssh/authorized_keys`). Several hosts can share one credential, so a new
+  password only has to be changed in one place.
 - **Automatic lock:** after 30 minutes without activity you are signed out and the vault locks. Running sessions keep
   going and are back after you sign in.
 - **Recovery key:** shown once during setup. It resets a forgotten password and unlocks backups.
@@ -67,16 +77,28 @@ no third-party account. The interface is available in English and German.
 
 - **SFTP next to the terminal:** upload (also by drag and drop), download, rename, delete, create folders, copy a path,
   insert it into the terminal, or `cd` there.
-- **Safe replace:** replacing a file on upload keeps the file itself (owner, permissions, hard links, Docker bind
-  mounts); an interrupted upload leaves the original untouched. Special files (devices, pipes, sockets) can't be
-  downloaded or replaced.
+- **Safe replace:** normally, replacing a file on upload keeps the file itself (owner, permissions, hard links, Docker
+  bind mounts), and an interrupted upload leaves the original untouched. The upload first goes completely into a
+  temporary file, then the host puts it in place (the progress bar shows “Replacing…” and can’t be canceled at that
+  point). If the host’s SFTP server supports “copy-data” (OpenSSH 9.0 or later), the host copies the file itself, so the
+  data crosses the connection once. On older hosts the app reads the temporary file back and writes it into the file, so
+  the data crosses the SSH connection three times. Closing a session waits up to one minute for this step, and shutting
+  down Keyway up to about 25 seconds (that’s why the container gets 30 seconds to stop: `stop_grace_period` in the
+  Compose file, `--stop-timeout 30` with `docker run`). If it takes longer, for example with a large file on an older
+  host over a slow connection, the file can stay incomplete. The complete upload then stays next to it as a hidden file
+  ending in `.sshapp-upload`. Two cases work differently. If the folder isn’t writable, the file is written directly,
+  so an interrupted upload leaves it incomplete (the app tells you). If the file is busy (for example a running
+  program), it is replaced by a new file: hard links and bind mounts then keep the old content, and the owner can
+  change. Special files (devices, pipes, sockets) can’t be downloaded or replaced.
 - **Follows the terminal:** on Linux hosts, after `cd /var/log` the Files panel shows `/var/log`, with bash, zsh, fish,
-  tcsh and other shells. If a device does not understand the start command for this (router CLIs, Windows), the app
+  tcsh, and other shells. If a device doesn’t understand the start command for this (router CLIs, Windows), the app
   falls back to a normal shell on its own. The panel then follows only if the shell reports its directory (OSC 7).
 
 ### Command help and search
 
-![Search: “extract archive” finds the matching commands, with the selected example ready to insert](docs/bilder/en/desktop-suche.png)
+<p align="center">
+  <img src="docs/bilder/en/desktop-suche.png" width="100%" alt="Search: “extract archive” lists matching commands, and the selected example waits with its placeholders, ready to insert into the terminal">
+</p>
 
 - **Offline command help:** about 7,000 commands from [tldr-pages](https://github.com/tldr-pages/tldr), shown in the
   interface language where a translation exists and in the other language otherwise. No internet connection needed.
@@ -85,7 +107,7 @@ no third-party account. The interface is available in English and German.
 - **Search in plain words:** “extract archive” or “free disk space” finds the right commands.
 - **Snippets:** save your own commands, with placeholders like `journalctl -u {{service}}`. The app asks for the values
   when you insert one.
-- **One search for everything:** <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> searches hosts, snippets and commands
+- **One search for everything:** <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd> searches hosts, snippets, and commands
   from anywhere (<kbd>Cmd</kbd>+<kbd>K</kbd> on a Mac). Plain <kbd>Ctrl</kbd>+<kbd>K</kbd> only works outside the
   terminal, because inside it the key belongs to the shell (nano, bash).
 
@@ -93,29 +115,30 @@ no third-party account. The interface is available in English and German.
 
 <table>
   <tr>
-    <td align="center"><img src="docs/bilder/en/telefon-terminal.png" width="300" alt="Terminal on a phone, with the key bar for Esc, Tab, Ctrl, Alt and arrows above the keyboard"></td>
-    <td align="center"><img src="docs/bilder/en/telefon-hosts.png" width="300" alt="Host list on a phone, each host with its device icon"></td>
+    <td align="center"><img src="docs/bilder/en/telefon-terminal.png" width="300" alt="Terminal on a phone, with the key bar for Esc, Tab, Ctrl, Alt, and arrows at the bottom"></td>
+    <td align="center"><img src="docs/bilder/en/telefon-hosts.png" width="300" alt="Host list on a phone, sorted into folders, each host with its device icon"></td>
   </tr>
 </table>
 
 - **Key bar** with Esc, Tab, Ctrl, Alt, arrows, Home/End, Page Up/Down, <kbd>Ctrl</kbd>+<kbd>C</kbd>/<kbd>D</kbd>/<kbd>Z</kbd>/<kbd>R</kbd>,
   common shell symbols, and paste and copy.
-- **Built for touch:** the menu, Files and the command help open as sheets, and every touch target is at least 44 px.
-- **Home screen:** add SSH-App to your home screen and it runs like an app.
+- **Built for touch:** the menu, Files, and the command help open as sheets, and every touch target is at least 44 px.
+- **Home screen:** add Keyway to your home screen and it runs like an app.
 
 ### Language and look
 
 - **English and German:** the interface follows your browser language. You can switch it on the sign-in page, in the
-  menu or in Settings › Appearance. The page reloads and running terminals reconnect on their own. Messages from the
+  menu, or in Settings › Appearance. The page reloads and running terminals reconnect on their own. Messages from the
   server, such as connection errors, come in the same language.
-- **Accent color:** violet by default, or blue, teal, green, amber or pink. The choice is saved per browser. Warnings
+- **Accent color:** violet by default, or blue, teal, green, amber, or pink. The choice is saved per browser. Warnings
   keep their own colors.
 - **Terminal font size** can be set per browser.
 
 ### Backup
 
-- **One encrypted file** with all hosts, folders, credentials, snippets and known host keys. You can restore it on this
-  system or on another one with the recovery key.
+- **One encrypted file** with all hosts, folders, credentials, snippets, and known host keys. You can restore it on this
+  system or on another one with the recovery key. Restoring also brings back the sign-in of the backed-up system (see
+  [Backup and moving to a new system](#backup-and-moving-to-a-new-system)).
 
 ## Quick start
 
@@ -127,13 +150,20 @@ docker compose up -d --build
 
 Then open `https://<address-of-the-machine>:8443` in your browser and **set it up right away** (see below). On first
 start the app creates its own certificate, so the browser warns you once. That is expected. To compare the
-certificate fingerprint, run `docker logs ssh-app`.
+certificate fingerprint, run `docker logs ssh-app` and look for the line
+`HTTPS mit eigenem Zertifikat, Fingerabdruck SHA-256 …` (the log is in German; it says “HTTPS with its own certificate,
+fingerprint SHA-256 …”).
+
+The certificate is issued to “Keyway (self-signed)”. Installations from before the rename keep their certificate with
+the old name `ssh-app`, and with it their fingerprint. To get the new name, stop the container, delete the `tls` folder
+in the data volume (for example `docker run --rm --volumes-from ssh-app alpine rm -rf /data/tls`), and start it again.
+The fingerprint changes then, and the browser warns once more.
 
 Without Compose:
 
 ```bash
 docker build -t ssh-app https://github.com/uiff/ssh-app.git
-docker run -d --name ssh-app -p 8443:8443 -v ssh-app-daten:/data --restart unless-stopped ssh-app
+docker run -d --name ssh-app -p 8443:8443 -v ssh-app-daten:/data --restart unless-stopped --stop-timeout 30 ssh-app
 ```
 
 The Compose file also hardens the container (read-only file system, no Linux capabilities). With `docker run` you get
@@ -141,6 +171,19 @@ the same with `--read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-pri
 
 Instead of a volume you can use a folder on the host (`-v /path/to/data:/data`). It must belong to the user the app runs
 as inside the container: `sudo chown 65532:65532 /path/to/data`. Otherwise the app stops at startup with a hint in the log.
+
+### Version and updates
+
+`git clone` and `docker build` with the repository address both build the current state of the default branch.
+Settings › About shows which version is running. To update, download a backup first (Settings › Backup), then:
+
+```bash
+git pull
+docker compose up -d --build
+```
+
+Without Compose, build the image again as above, then `docker stop ssh-app && docker rm ssh-app` and start it with the
+same `docker run` command. Hosts, credentials, and the sign-in stay in the volume.
 
 ### Raspberry Pi and other platforms
 
@@ -159,7 +202,7 @@ program is cross-compiled, so no emulator (QEMU) is needed.
   as above. The Compose file works too: `docker compose up -d` (without `--build`) uses the loaded image `ssh-app:latest`.
 - **Several platforms in one image:** this needs a buildx builder with the `docker-container` driver. The default
   builder (`docker` driver) refuses multiple platforms unless the containerd image store is turned on. A multi-platform
-  image also cannot be loaded into the local image store. Push it to a registry instead:
+  image also can’t be loaded into the local image store. Push it to a registry instead:
 
   ```bash
   docker buildx create --name ssh-app-bau --driver docker-container --use   # once
@@ -170,27 +213,32 @@ program is cross-compiled, so no emulator (QEMU) is needed.
 
 ## First-time setup
 
-![Setup: the recovery key is shown once, with buttons to copy it or save it as a file](docs/bilder/en/einrichten.png)
+<p align="center">
+  <img src="docs/bilder/en/einrichten.png" width="480" alt="Setup: the recovery key is shown once, with buttons to copy it or save it as a file">
+</p>
 
 **Do this right after the first start.** Until the app is set up, anyone who can reach its address can create the
 account or restore a backup. Whoever comes first sets it up. So only open the port to others once setup is done.
 
-1. Choose a user name and a password (at least 10 characters). The password also unlocks the vault.
+1. Choose a username and a password (at least 10 characters). The password also unlocks the vault.
 2. The app shows the **recovery key** only **once**. Copy it or save it as a file, and keep it separate from the app, for
    example in your password manager. With it you can
    - reset the password (“Forgot your password?” on the sign-in page),
    - restore a backup, also on another system.
 
-   Without the recovery key, a backup cannot be read.
-3. Add hosts: pick a device type, enter address and user, then type the password or let the app ask when you connect.
+   Without the recovery key, a backup can’t be read.
+3. Add hosts: pick a device type, enter address and username, then type the password or let the app ask when you connect.
 
 ## Backup and moving to a new system
 
 - **Download backup:** Settings › Backup. You get one encrypted file. Passwords and keys inside stay encrypted.
 - **Move to a new system:** on the first start there, choose **Restore backup** and enter the backup file and the
-  recovery key. Then sign in with the user name and password of the old system.
-- **Restore on a running system:** Settings › Backup › **Restore backup** replaces all hosts, credentials and snippets
-  on this system.
+  recovery key. Then sign in with the username and password of the old system. The recovery key of the old system
+  stays valid.
+- **Restore on a running system:** Settings › Backup › **Restore backup** replaces all hosts, folders, credentials,
+  snippets, and known host keys on this system, **and also the sign-in**. Everyone is signed out. Afterward you sign in
+  with the username and password of the backed-up system, and only its recovery key is valid. The username, password,
+  and recovery key this system had before no longer work.
 - **Changing the password** keeps the recovery key valid.
 
 ## Configuration (environment variables)
@@ -211,20 +259,20 @@ with `go run`, the program defaults apply (column “Without container”).
 | `SSHAPP_HOSTS` | – | – | Additional host names for the app, comma-separated; `*.example.com` covers all subdomains (DNS rebinding protection, see below). When set, the app always checks the name, also over HTTPS |
 | `SSHAPP_ORIGINS` | – | – | Additional allowed origins (`Origin`) for the terminal WebSocket, comma-separated, patterns like `https://*.example.com`. Only needed if a proxy changes the Host header |
 | `SSHAPP_HSTS` | – | – | `1` = send Strict-Transport-Security: browsers then use only HTTPS for this name for one year, on all ports. Only set it if everything under this name speaks HTTPS |
-| `SSHAPP_LEERLAUF_MIN` | `30` | `30` | Minutes without activity until the sign-in expires and the vault locks. Activity means typing in the terminal and actions in the app; background polling does not count. Running sessions stay alive and can be reopened after signing in |
+| `SSHAPP_LEERLAUF_MIN` | `30` | `30` | Minutes without activity until the sign-in expires and the vault locks. Activity means typing in the terminal and actions in the app; background polling doesn’t count. Running sessions stay alive and can be reopened after signing in |
 
 **DNS rebinding protection:** a malicious website could point its own name at the app’s address. That is why the app
 checks the name it is called by in HTTP mode (`SSHAPP_TLS=aus`), and always as soon as `SSHAPP_HOSTS` is set. The only
 exception is running behind an HTTPS proxy (`SSHAPP_COOKIE_SECURE=1`) without `SSHAPP_PROXY` and without
-`SSHAPP_HOSTS`, because then the app does not know the name. Allowed without any setting are IP addresses, `localhost`,
-host names without a dot and the local suffixes `.local`, `.lan`, `.home`, `.home.arpa`, `.internal`, `.intranet`,
-`.localdomain`, `.localhost`, `.fritz.box` and `.ts.net` (Tailscale). Other names (such as `ssh.example.com`) go into
-`SSHAPP_HOSTS`. Requests from a proxy listed in `SSHAPP_PROXY` are not checked; the proxy does that.
+`SSHAPP_HOSTS`, because then the app doesn’t know the name. Allowed without any setting are IP addresses, `localhost`,
+host names without a dot, and the local suffixes `.local`, `.lan`, `.home`, `.home.arpa`, `.internal`, `.intranet`,
+`.localdomain`, `.localhost`, `.fritz.box`, and `.ts.net` (Tailscale). Other names (such as `ssh.example.com`) go into
+`SSHAPP_HOSTS`. Requests from a proxy listed in `SSHAPP_PROXY` aren’t checked; the proxy does that.
 
 ## Running behind a reverse proxy
 
-With a proxy (Caddy, nginx, Traefik) and a real certificate, the certificate warning goes away. The app then speaks
-plain HTTP and is reachable only by the proxy. In `compose.yml`:
+With a proxy (Caddy, nginx, Traefik) and a certificate the browser trusts, the certificate warning goes away. The app
+then speaks plain HTTP and is reachable only by the proxy. In `compose.yml`:
 
 ```yaml
     ports:
@@ -237,7 +285,7 @@ plain HTTP and is reachable only by the proxy. In `compose.yml`:
 ```
 
 The address the app sees the proxy at appears in the log after a sign-in attempt (`docker logs ssh-app`, line
-`Anmeldung von …`; the log is in German). If the proxy
+`Anmeldung von …`, “sign-in from …”; the log is in German). If the proxy
 runs on the same machine, it is the gateway address of the Docker network, usually from `172.16.0.0/12`. If your own
 network is in that range too, enter only the exact address.
 
@@ -251,13 +299,31 @@ What the proxy has to do:
 - **Set `X-Forwarded-For`**, so the sign-in lockout hits the individual browser and not everyone.
 - **Allow large uploads.** The Files panel uploads files of any size, and a backup may be up to 64 MB.
 
-Caddy does all of this out of the box:
+Caddy does all of this out of the box. For a domain you own, Caddy gets a certificate from Let’s Encrypt on its own:
 
 ```
-ssh.example.lan {
+ssh.example.com {
     reverse_proxy 127.0.0.1:8080
 }
 ```
+
+For that, the name has to point to this machine in public DNS, and port 80 or 443 has to be reachable from the
+internet. If the app should stay inside your network, use the DNS challenge instead (a Caddy build with the module for
+your DNS provider, see the Caddy documentation).
+
+For a name that only exists in your own network (such as `ssh.home.lan` or `ssh.local`), no public certificate
+authority issues a certificate. Caddy can sign one itself with `tls internal`:
+
+```
+ssh.home.lan {
+    tls internal
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+Browsers only trust this certificate once Caddy’s root certificate is installed on each device. You find it in Caddy’s
+data folder under `pki/authorities/local/root.crt`; on the Caddy machine itself, `caddy trust` installs it. If you
+already have a certificate for the name, write `tls /path/to/cert.pem /path/to/key.pem` instead of `tls internal`.
 
 nginx needs a few more lines:
 
@@ -269,7 +335,7 @@ map $http_upgrade $connection_upgrade {
 
 server {
     listen 443 ssl;
-    server_name ssh.example.lan;
+    server_name ssh.example.com;
     # ssl_certificate and ssl_certificate_key as usual
 
     location / {
@@ -298,13 +364,13 @@ at startup.
   Policy, and DNS rebinding protection in HTTP mode.
 - Passwords and private keys are stored only encrypted in the database. The key for them lives only in memory and is
   discarded when the vault locks (sign-out or inactivity). Copies that Go makes on its own (such as the password you
-  typed or internal buffers) cannot be wiped reliably. Anyone who can read the process memory (root, core dump, swap) may
-  find them. To connect, the server has to decrypt a secret briefly. End-to-end encryption all the way to the browser is
-  not possible for an SSH gateway.
+  typed or internal buffers) can’t be wiped reliably. Anyone who can read the process memory (root, core dump, swap) may
+  find them. To connect, the server has to decrypt a secret briefly. End-to-end encryption all the way to the browser
+  isn’t possible for an SSH gateway.
 - The image contains no shell and runs as an unprivileged user (65532). The Compose file also sets a read-only file
   system and drops all Linux capabilities.
 - Setup is open until someone completes it. So set the app up right after starting it (see above).
-- The app is meant for your own network. Do not expose it to the internet unprotected.
+- The app is meant for your own network. Don’t expose it to the internet unprotected.
 
 ## Development
 
@@ -315,15 +381,38 @@ node --experimental-websocket tools/klicktest.js <url> <ssh-host> <port> <user> 
 ```
 
 `tools/klicktest.js` clicks through the interface in headless Chrome and takes photos along the way. With `-` as
-`<ssh-host>` it tests the interface without an SSH target. `SPRACHE=de|en` picks the interface language;
-`DATEIEN_ORDNER=<dir>` also tests the Files panel (only with the embedded test SSH server:
-`SSHAPP_TESTSSH_HALTEN=<seconds> go test ./internal/server -run 'TestSSHHalten$' -v` prints its address).
+`<ssh-host>` it tests the interface without an SSH target. `SPRACHE=de|en` picks the interface language.
+
+What the click test needs:
+
+- **Node.js 20.10 or later** (for `--experimental-websocket`) and **Chrome Headless Shell** in the Puppeteer cache
+  (`npx @puppeteer/browsers install chrome-headless-shell@stable --path ~/.cache/puppeteer`), or any other Chrome
+  with `CHROME=/path/to/chrome`.
+- **An instance that isn’t set up yet.** The test then sets it up itself (username `admin`, password
+  `klicktest-passwort`). For an instance that’s already set up, pass its username and password as `SSHAPP_USER` and
+  `SSHAPP_PW`.
+- **A data folder you can throw away.** The test adds a credential and a host. So start the instance with its own data
+  folder, for example `SSHAPP_DATA=/tmp/klick go run ./cmd/ssh-app`, and not with your usual `./data`.
+
+You don’t need a real device for the terminal and the Files panel: the tests bring their own **test SSH server**.
+`SSHAPP_TESTSSH_HALTEN=600 go test ./internal/server -run 'TestSSHHalten$' -v -timeout 0` keeps it running for 600 seconds and
+prints its address (`TESTSSH 127.0.0.1:<port>`). The username is `pi`, the password `himbeere`. Its shell only echoes
+what you type, and its SFTP shows the local file system of your machine. For example:
+
+```bash
+node --experimental-websocket tools/klicktest.js https://localhost:8443 127.0.0.1 <port> pi himbeere ./fotos
+```
+
+`DATEIEN_ORDNER=<dir>` also tests the Files panel. This only works with the test SSH server, because the folder is
+created on your machine.
 
 For the command help during development, put `tldr-pages.de.zip` and `tldr-pages.en.zip` from
 <https://github.com/tldr-pages/tldr/releases> into `./data/hilfe/` (or `<SSHAPP_DATA>/hilfe/`). The image packs these
 archives itself during the build, from a pinned commit of the tldr repository (`TLDR_COMMIT` in the Dockerfile).
 
 Structure: Go backend (`internal/`), embedded interface without a build step (`web/static/`), SQLite for storage.
+Technical names (Go module `github.com/uiff/ssh-app`, program `cmd/ssh-app`, variables `SSHAPP_*`, headers `X-SSH-App*`,
+backup format) still use the old name `ssh-app`, so that existing installations and backups stay compatible.
 
 Translations: each text exists in German and English.
 
@@ -341,5 +430,5 @@ Translations: each text exists in German and English.
 
 MIT, see [LICENSE](LICENSE). Third-party software and data: see [NOTICE](NOTICE). The license texts of all bundled and
 compiled-in libraries are embedded and can be viewed in the app under Settings › About › Licenses. The command help
-comes from [tldr-pages](https://github.com/tldr-pages/tldr) (CC BY 4.0). The name and logo “IoTUeli” are trademarks of
-IoTUeli and are not covered by the MIT License.
+comes from [tldr-pages](https://github.com/tldr-pages/tldr) (CC BY 4.0). The names and logos “Keyway” and “IoTUeli” are
+trademarks of IoTUeli and aren’t covered by the MIT License.

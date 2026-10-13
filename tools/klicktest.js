@@ -4,7 +4,9 @@
 // bestaetigen, tippen, Dateien und Hilfe oeffnen, Palette — mit Fotos.
 // Prueft dazu: gleich hohe Leisten (Unterkanten auf einer Linie), Trefferflaechen >= 44 px
 // auf dem Telefon, kein waagrechter Ueberlauf, keine Skriptfehler, keine fehlenden Texte im
-// Sprachkatalog und (SPRACHE=en) keine deutschen Texte in der Oberflaeche.
+// Sprachkatalog und (SPRACHE=en) keine deutschen Texte in der Oberflaeche. Ausserdem: Der
+// Sicherheitsschluessel bricht nur zwischen Vierergruppen um, die Kopfzeile bleibt im Bild, und
+// mit allen Leisten offen behaelt das Terminal mindestens 60 Spalten (Desktop).
 //
 // Aufruf: node --experimental-websocket tools/klicktest.js <url> <ssh-host> <ssh-port> <ssh-user> <ssh-pw> <fotoordner> [breite hoehe]
 // <ssh-host> = «-»: ohne SSH-Ziel (nur Oberflaeche: Startseite, Dialoge, Palette, Blaetter, Einstellungen).
@@ -140,6 +142,10 @@ function chromePfad() {
     await bis('!!document.querySelector(".schluessel-box")', 15000, 'Sicherheitsschluessel');
     await foto('sicherheitsschluessel');
     await deutsch('Sicherheitsschluessel');
+    // Umbruch nur zwischen den Gruppen: jede Gruppe (Textknoten «ABCD-») liegt auf einer Zeile.
+    const zerrissen = await ev(`[...document.querySelector('.schluessel-box').childNodes].filter((n) => n.nodeType === 3)
+      .filter((n) => { const r = document.createRange(); r.selectNodeContents(n); return new Set([...r.getClientRects()].map((x) => Math.round(x.top))).size > 1; }).map((n) => n.textContent)`);
+    if (zerrissen.length) probleme.push('Sicherheitsschluessel bricht in einer Gruppe um: ' + zerrissen.join(' '));
     const sk = await ev('document.querySelector(".schluessel-box").textContent');
     fs.writeFileSync(path.join(fotos, 'sicherheitsschluessel.txt'), sk + '\n');
     await ev('document.querySelector(".einstieg input[type=checkbox]").click()');
@@ -181,6 +187,9 @@ function chromePfad() {
   };
   await leisten('Start');
   await flaechen('Start');
+  // Kopfzeile: nichts ragt aus dem Bild (lange Texte, schmale Fenster).
+  const kopfRaus = await ev(`[...document.querySelectorAll('.kopf > *')].filter((e) => e.offsetParent !== null && e.getBoundingClientRect().right > innerWidth + 0.5).map((e) => e.className || e.tagName)`);
+  if (kopfRaus.length) probleme.push('Kopfzeile ragt aus dem Bild: ' + kopfRaus.join(', '));
   // Mehr-Menue mit Sprachwahl (andere Sprache in ihrer eigenen Schreibweise)
   await ev('document.querySelector(".kopf > .ikon:last-child").click()');
   await warte(300);
@@ -355,6 +364,28 @@ function chromePfad() {
     await warte(1500);
     await foto('dateien-hilfe');
     await deutsch('Dateien und Hilfe');
+    // Alle Leisten offen: Das Terminal behaelt mindestens 60 Spalten. Dateien und Befehlshilfe
+    // schliessen sich gegenseitig, wenn nicht beide neben 60 Spalten passen; keine Leiste liegt
+    // ueber dem Terminal, und nichts im Arbeitsbereich ragt aus dem Bild.
+    await ev('App.seiteUmschalten("links", true)');
+    await warte(400);
+    const platz = await ev(`(() => {
+      const sicht = (e) => e && !e.classList.contains('versteckt') && e.offsetParent !== null && getComputedStyle(e).display !== 'none';
+      const mitte = document.querySelector('.mitte').getBoundingClientRect();
+      const ueber = [...document.querySelectorAll('.seite')].filter((e) => {
+        if (!sicht(e)) return false;
+        const q = e.getBoundingClientRect();
+        return q.right > mitte.left + 0.5 && q.left < mitte.right - 0.5 && q.bottom > mitte.top + 0.5 && q.top < mitte.bottom - 0.5;
+      }).map((e) => e.className);
+      return { spalten: App.aktiv.term.cols, breite: innerWidth, beide: !!(App.seiten.dateien && App.seiten.hilfe), ueber,
+        raus: [...document.querySelectorAll('.koerper > *')].filter((e) => e.offsetParent !== null && e.getBoundingClientRect().right > innerWidth + 0.5).map((e) => e.className) }; })()`);
+    console.log('Alle Leisten offen:', JSON.stringify(platz));
+    if (platz.spalten < 60) probleme.push('Terminal mit allen Leisten nur ' + platz.spalten + ' Spalten');
+    if (platz.raus.length) probleme.push('Leisten ragen aus dem Bild: ' + platz.raus.join(', '));
+    if (platz.ueber.length) probleme.push('Leiste liegt ueber dem Terminal: ' + platz.ueber.join(', '));
+    // Unter etwa 1166 px passen Dateien und Hilfe nicht beide neben 60 Spalten (Schrift 14, Zelle 8 px;
+    // ohne Font-Hinting wie auf macOS ist die Zelle 8,4 px breit und die Grenze liegt hoeher).
+    if (platz.breite < 1166 && platz.beide) probleme.push('Dateien und Hilfe bei ' + platz.breite + ' px gleichzeitig offen');
   } else {
     await ev('App.seiteUmschalten("dateien", true)');
     await warte(2500);

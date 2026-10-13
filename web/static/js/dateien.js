@@ -313,6 +313,10 @@ class Dateien {
   }
 
   // Uebertraegt die Dateien. erlaubt = Namen, die vorhandene Dateien ersetzen duerfen (je Datei bestaetigt).
+  // Zwei Phasen: Bis 100 % laeuft die Uebertragung (Abbrechen verwirft Unvollstaendiges, das
+  // Original bleibt). Danach speichert bzw. ersetzt der Host noch («Ersetze …»): Das laeuft auf
+  // dem Server zu Ende, darum gibt es dann kein Abbrechen mehr, und ein Abbruch der Verbindung
+  // wird ehrlich als «Ergebnis unklar» gemeldet statt als «verworfen».
   senden(sitzung, ziel, dateien, erlaubt) {
     const fd = new FormData();
     dateien.forEach((f) => fd.append('datei', f, f.name));
@@ -323,21 +327,44 @@ class Dateien {
     const balken = el('div');
     const name = dateien.length === 1 ? dateien[0].name : t('dateien.anzahl', { n: dateien.length });
     const prozentText = (p) => (p / 100).toLocaleString(lokalCode(), { style: 'percent' });
-    const prozent = el('span', null, prozentText(0));
+    const prozent = el('span', { style: { whiteSpace: 'nowrap' } }, prozentText(0));
+    const abbrechen = ikonKnopf('x', t('dateien.hochladen.abbrechen'), () => xhr.abort());
     ersetzen(this.fortschritt,
-      el('div', { class: 'reihe', style: { justifyContent: 'space-between', flexWrap: 'nowrap', gap: '8px' } },
+      el('div', { class: 'reihe', style: { justifyContent: 'space-between', flexWrap: 'nowrap', gap: '8px', minHeight: '44px' } },
         el('span', { style: { minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' } }, name),
-        el('span', { class: 'reihe', style: { flexWrap: 'nowrap', gap: '2px' } }, prozent, ikonKnopf('x', t('dateien.hochladen.abbrechen'), () => xhr.abort()))),
+        el('span', { class: 'reihe', style: { flexWrap: 'nowrap', gap: '2px' } }, prozent, abbrechen)),
       el('div', { class: 'balken' }, balken));
     this.fortschritt.classList.remove('versteckt');
+    let uebertragen = false; // Der Browser hat alles gesendet, der Host ist am Speichern/Ersetzen.
+    let lauf = null;
     const fertig = () => {
+      if (lauf) lauf.cancel();
       this.fortschritt.classList.add('versteckt');
       if (this.pfad === ziel) this.laden(ziel);
     };
+    // Ergebnis unklar (Abbruch nach 100 %): Der Host arbeitet womoeglich noch. Gleich und danach
+    // noch einige Male neu laden, damit die Liste den Stand nach dem Einsetzen zeigt.
+    const unklar = (schluessel) => {
+      fertig();
+      toast(t(schluessel), 'fehler');
+      for (const ms of [2000, 6000, 15000]) setTimeout(() => { if (this.pfad === ziel && this.bereit()) this.laden(ziel, true); }, ms);
+    };
     xhr.upload.onprogress = (e) => {
-      if (!e.lengthComputable) return;
+      if (!e.lengthComputable || uebertragen) return;
       const p = Math.round((e.loaded / e.total) * 100);
       balken.style.width = p + '%'; prozent.textContent = prozentText(p);
+    };
+    xhr.upload.onload = () => {
+      uebertragen = true;
+      // Den Fokus nicht ins Leere fallen lassen, wenn er auf dem Abbrechen-Knopf lag.
+      if (document.activeElement === abbrechen && !this.knoepfe.hoch.disabled) this.knoepfe.hoch.focus();
+      abbrechen.remove();
+      prozent.textContent = erlaubt.length ? t('dateien.hochladen.ersetze') : t('dateien.hochladen.speichere');
+      balken.style.width = '30%';
+      const ruhig = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+      if (!ruhig && balken.animate) {
+        lauf = balken.animate([{ transform: 'translateX(-100%)' }, { transform: 'translateX(340%)' }], { duration: 1400, iterations: Infinity, easing: 'ease-in-out' });
+      } else balken.style.width = '100%';
     };
     xhr.onload = async () => {
       fertig();
@@ -360,8 +387,14 @@ class Dateien {
       }
       toast(textHochgeladen(hoch.length ? hoch : dateien.map((f) => f.name)));
     };
-    xhr.onerror = () => { fertig(); toast(t('dateien.hochladen.verbindungWeg'), 'fehler'); };
-    xhr.onabort = () => { fertig(); toast(t('dateien.hochladen.abgebrochen')); };
+    xhr.onerror = () => {
+      if (uebertragen) { unklar('dateien.hochladen.verbindungWegDanach'); return; }
+      fertig(); toast(t('dateien.hochladen.verbindungWeg'), 'fehler');
+    };
+    xhr.onabort = () => {
+      if (uebertragen) { unklar('dateien.hochladen.abgebrochenDanach'); return; }
+      fertig(); toast(t('dateien.hochladen.abgebrochen'));
+    };
     xhr.send(fd);
   }
 }

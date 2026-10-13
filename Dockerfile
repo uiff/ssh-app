@@ -1,5 +1,6 @@
 # syntax=docker/dockerfile:1
-# ssh-app — ein statisches Go-Programm in einem minimalen Image (ohne Shell).
+# Keyway by IoTUeli — ein statisches Go-Programm in einem minimalen Image (ohne Shell).
+# Programm, Image und Repository heissen weiterhin «ssh-app» (Kompatibilitaet).
 # Uebersetzt per Cross-Compile fuer die Zielplattform, also auch arm64 ohne QEMU.
 #   Auf dem Zielgeraet selbst (Plattform automatisch):  docker compose up -d --build
 #   Fuer ein anderes Geraet (eine Plattform, landet im lokalen Image-Speicher):
@@ -16,7 +17,7 @@ ARG GO_VERSION=1.26
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS bau
 ARG TARGETOS
 ARG TARGETARCH
-ARG VERSION=0.1.0
+ARG VERSION=0.2.0
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -48,8 +49,9 @@ RUN apk add --no-cache curl zip \
 
 # --- 3. Laufzeit: distroless, laeuft als Benutzer «nonroot» (65532) --------
 FROM gcr.io/distroless/static-debian12:nonroot
-LABEL org.opencontainers.image.title="ssh-app" \
-      org.opencontainers.image.description="Web SSH client with vault, files and command help" \
+LABEL org.opencontainers.image.title="Keyway" \
+      org.opencontainers.image.description="Keyway by IoTUeli: self-hosted web SSH client with terminal, files, command help, and an encrypted vault" \
+      org.opencontainers.image.url="https://iotueli.ch" \
       org.opencontainers.image.source="https://github.com/uiff/ssh-app" \
       org.opencontainers.image.vendor="IoTUeli" \
       org.opencontainers.image.licenses="MIT"

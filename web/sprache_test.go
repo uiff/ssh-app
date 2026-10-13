@@ -556,7 +556,7 @@ func TestKeineRohtexteImBrowserCode(t *testing.T) {
 			t.Fatalf("Erkennung verfehlt %q", s)
 		}
 	}
-	for _, s := range []string{"ordner", "btn klein primaer", "$#%❯»", "Reconnect", "SSH-App", "IoTUeli — iotueli.ch", "data-mod"} {
+	for _, s := range []string{"ordner", "btn klein primaer", "$#%❯»", "Reconnect", "SSH-App", "Keyway", "Keyway · by IoTUeli", "IoTUeli — iotueli.ch", "data-mod"} {
 		if g := deutscherText(s); g != "" {
 			t.Fatalf("Fehlalarm bei %q: %s", s, g)
 		}

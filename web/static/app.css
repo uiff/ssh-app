@@ -1,4 +1,4 @@
-/* SSH-App — dunkles Werkzeug-Design, zuerst fuers Telefon gebaut. */
+/* Keyway — dunkles Werkzeug-Design, zuerst fuers Telefon gebaut. */
 
 @font-face { font-family: "Plex"; src: url(vendor/fonts/ibm-plex-sans-latin-400-normal.woff2) format("woff2"); font-weight: 400; font-display: swap; }
 @font-face { font-family: "Plex"; src: url(vendor/fonts/ibm-plex-sans-latin-500-normal.woff2) format("woff2"); font-weight: 500; font-display: swap; }
@@ -84,6 +84,7 @@ textarea { padding: 10px 12px; min-height: 120px; font-family: var(--mono); font
 input:focus, select:focus, textarea:focus { border-color: var(--akzent); outline: none; }
 .reihe { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
 .raster2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.raster2 > * { min-width: 0; } /* langer Inhalt (Text ohne Umbruch, select) weitet die Spalte nicht */
 .check { display: flex; align-items: flex-start; gap: 12px; min-height: 44px; padding: 10px 0; cursor: pointer; line-height: 1.45; }
 .check input { width: 22px; height: 22px; margin: 0; flex: none; accent-color: var(--akzent); }
 .chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 12px; background: var(--flaeche2); font-size: 12px; color: var(--text2); }
@@ -101,10 +102,11 @@ button.chip { position: relative; }
 .einstieg-form h2 { margin: 0; font-size: 26px; }
 .einstieg-form p.unter { margin: -8px 0 4px; color: var(--leise); line-height: 1.5; }
 .einstieg .fuss { font-size: 13px; color: var(--leise); }
-.logo-link { display: inline-flex; align-items: center; min-height: 44px; }
-.logo-link img { display: block; height: 36px; width: auto; }
-.einstieg-bild .logo-link { align-self: flex-start; } /* nur das Logo ist Link, nicht die ganze Zeile (oben rechts liegt die Sprachwahl) */
-.schluessel-box { font-family: var(--mono); font-size: 17px; line-height: 1.7; letter-spacing: .02em; padding: 16px; border-radius: var(--radius); background: var(--term); border: 1px solid var(--akzent); word-break: break-all; user-select: all; }
+.einstieg-bild { --marke-grund: var(--term); }
+.marke-gross { display: flex; align-items: center; gap: 14px; min-height: 44px; font-size: 26px; font-weight: 700; letter-spacing: -0.01em; }
+/* Sicherheitsschluessel: Umbruch nur zwischen den Vierergruppen (<wbr> nach jedem Bindestrich, js/app.js);
+   «anywhere» greift nur, wenn eine einzelne Gruppe nicht in die Zeile passt. */
+.schluessel-box { font-family: var(--mono); font-size: 17px; line-height: 1.7; letter-spacing: .02em; padding: 16px; border-radius: var(--radius); background: var(--term); border: 1px solid var(--akzent); overflow-wrap: anywhere; user-select: all; }
 .meldung { padding: 12px 14px; border-radius: 8px; font-size: 14px; line-height: 1.5; display: flex; gap: 10px; align-items: flex-start; }
 .meldung.fehler { background: var(--fehler-grund); color: var(--fehler-text); border: 1px solid var(--fehler-rand); }
 .meldung.warn { background: var(--warn-grund); color: var(--warn-text); }
@@ -122,11 +124,16 @@ button.chip { position: relative; }
 
 /* ---------- Arbeitsplatz ---------- */
 .app { position: fixed; left: 0; right: 0; top: 0; height: var(--app-hoehe, 100%); display: flex; flex-direction: column; }
-.kopf { height: var(--kopf); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; background: var(--flaeche); border-bottom: 1px solid var(--linie); padding-top: env(safe-area-inset-top, 0px); height: calc(var(--kopf) + env(safe-area-inset-top, 0px)); }
-.kopf .marke { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.kopf .marke img { height: 24px; width: auto; display: block; }
-.kopf .marke .trenner { width: 1px; height: 22px; background: var(--linie); }
-.kopf .marke .name { font-weight: 700; font-size: 16px; white-space: nowrap; }
+.kopf { --marke-grund: var(--flaeche); height: var(--kopf); flex: none; display: flex; align-items: center; gap: 8px; padding: 0 8px 0 12px; background: var(--flaeche); border-bottom: 1px solid var(--linie); padding-top: env(safe-area-inset-top, 0px); height: calc(var(--kopf) + env(safe-area-inset-top, 0px)); }
+.kopf .marke { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.kopf .marke .name { font-weight: 700; font-size: 17px; letter-spacing: -0.01em; white-space: nowrap; }
+/* Symbol von Keyway (Inline-SVG): Schluesselloch in der Akzentfarbe, Prompt in der Farbe des Grundes */
+.keyway-symbol { display: block; flex: none; }
+.keyway-symbol .loch { fill: var(--akzent); }
+.keyway-symbol .prompt { fill: none; stroke: var(--marke-grund, var(--flaeche)); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+/* Knopf «Hosts und Tresor»: Telefon immer, Desktop nur bei eingeklappter Host-Leiste */
+.kopf .links-knopf { display: none; }
+.kopf.links-eingeklappt .links-knopf { display: inline-flex; }
 .kopf .platz { flex: 1; }
 .kopf .suche { display: flex; align-items: center; gap: 10px; height: 38px; min-width: 180px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--linie); background: var(--grund); color: var(--leise); }
 .kopf .suche kbd { font-family: var(--mono); font-size: 12px; border: 1px solid var(--linie); border-radius: 4px; padding: 1px 6px; margin-left: auto; }
@@ -136,6 +143,13 @@ button.chip { position: relative; }
 .seite { width: 270px; flex: none; background: #12151B; border-right: 1px solid var(--linie); display: flex; flex-direction: column; min-height: 0; }
 .seite.rechts { border-right: 0; border-left: 1px solid var(--linie); width: 340px; }
 .seite.dateien { width: 320px; }
+/* Zu wenig Breite fuer Leisten und Terminal (mind. 60 Spalten, js/app.js platzVerteilen): Dateien und
+   Befehlshilfe schliessen sich gegenseitig, die Host-Leiste klappt ein. Nur sie schwebt auf Knopfdruck
+   ueber dem Terminal (mit Schleier, wie ein Blatt); Dateien und Befehlshilfe bleiben immer angedockt. */
+@media (min-width: 900px) {
+  .seite.eingeklappt { display: none; }
+  .seite.links.schwebend { position: absolute; top: 0; bottom: 0; left: 0; z-index: 40; box-shadow: 16px 0 40px rgba(0,0,0,.45); }
+}
 /* Leisten (V8): genau --leiste hoch. Die Trennlinie ist ein Schatten innen, so liegen alle Unterkanten
    auf derselben Pixelzeile und die volle Hoehe bleibt fuer 44-px-Trefferflaechen nutzbar.
    Seitenleisten-Koepfe: Die 44-px-Knoepfe fuellen die ganze Hoehe, ihr Hover-Hintergrund (am Telefon
@@ -187,6 +201,8 @@ button.chip { position: relative; }
 .term-ueber-text small { font-size: 12.5px; color: var(--leise); }
 .term-ueber-text .reihe { gap: 8px; }
 .statusleiste { height: 30px; flex: none; display: flex; align-items: center; gap: 18px; padding: 0 14px; border-top: 1px solid var(--linie); background: #12151B; font-size: 12px; color: var(--leise); white-space: nowrap; overflow: hidden; }
+.statusleiste > * { flex: none; }
+.statusleiste > .kuerzbar { flex: 0 1 auto; min-width: 48px; overflow: hidden; text-overflow: ellipsis; }
 .statusleiste .zustand, .statusleiste .geraet { display: inline-flex; align-items: center; gap: 6px; }
 .statusleiste .zustand .hsym-punkt { position: static; box-shadow: none; background: currentColor; }
 .statusleiste .zustand.z-bereit { color: var(--gut-hell); }
@@ -240,11 +256,17 @@ button.chip { position: relative; }
 .erklaerung { background: var(--grund); border: 1px solid var(--linie); border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .erklaerung .kopfzeile { font-size: 11px; font-weight: 600; letter-spacing: .06em; color: var(--leise); text-transform: uppercase; }
 .erklaerung .teil { display: flex; gap: 10px; font-size: 13px; line-height: 1.45; }
-.erklaerung .teil code { color: var(--akzent); min-width: 70px; flex: none; word-break: break-all; }
+.erklaerung .teil > code { color: var(--akzent); min-width: 70px; flex: none; word-break: break-all; }
+/* Schalterbuendel: jeder Buchstabe eine Zeile */
+.erklaerung .teil .zeilen { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.erklaerung .teil .zeilen code { color: var(--text); }
 .beispiel { display: flex; flex-direction: column; gap: 6px; }
 .beispiel .t { font-size: 13px; color: var(--text2); line-height: 1.45; }
 .beispiel .b { display: flex; align-items: center; gap: 6px; background: var(--grund); border-radius: 6px; padding: 4px 4px 4px 10px; }
-.beispiel .b code { flex: 1; font-size: 12.5px; word-break: break-all; padding: 6px 0; }
+.beispiel .b code { flex: 1; min-width: 0; font-size: 12.5px; overflow-wrap: anywhere; padding: 6px 0; }
+/* Befehle zum Lesen (js/basis.js befehlWoerter): ein Kasten je Wort. Umbruch nur an Leerzeichen, nie mitten
+   in einem Schalter; nur ein Wort, das allein nicht in die Zeile passt (langer Pfad), bricht in sich um. */
+.wort { display: inline-block; max-width: 100%; vertical-align: top; overflow-wrap: anywhere; }
 .ph { color: var(--akzent-text); background: var(--akzent); border-radius: 3px; padding: 0 4px; }
 .quelle { font-size: 11.5px; color: var(--leise); line-height: 1.6; }
 code.inline { font-size: .92em; padding: 0 4px; border-radius: 4px; background: var(--flaeche2); color: var(--text); }
@@ -265,7 +287,7 @@ code.inline { font-size: .92em; padding: 0 4px; border-radius: 4px; background: 
 .treffer .q { font-size: 11px; color: var(--leise); flex: none; }
 .palette-fuss { min-height: 40px; display: flex; align-items: center; gap: 18px; padding: 0 18px; border-top: 1px solid var(--linie); font-size: 12px; color: var(--leise); flex-wrap: wrap; }
 .palette-fuss b { font-family: var(--mono); color: var(--text); font-weight: 600; }
-.befehl-gross { background: var(--term); border: 1px solid var(--linie); border-radius: 10px; padding: 16px 18px; font-family: var(--mono); font-size: 15px; line-height: 1.6; word-break: break-all; }
+.befehl-gross { background: var(--term); border: 1px solid var(--linie); border-radius: 10px; padding: 16px 18px; font-family: var(--mono); font-size: 15px; line-height: 1.6; overflow-wrap: anywhere; }
 
 /* Dialoge */
 .schleier { position: fixed; inset: 0; background: rgba(5, 6, 8, .72); z-index: 50; }
@@ -305,8 +327,7 @@ code.inline { font-size: .92em; padding: 0 4px; border-radius: 4px; background: 
   .nur-telefon { display: inherit !important; }
   .nur-desktop { display: none !important; }
   .kopf { gap: 2px; padding: 0 4px; padding-top: env(safe-area-inset-top, 0px); }
-  .kopf .marke .name { font-size: 15px; }
-  .kopf .marke img { height: 20px; }
+  .kopf .links-knopf { display: inline-flex; }
   .tab-wahl { flex: 1; min-width: 0; display: flex; align-items: center; gap: 8px; height: 44px; padding: 0 10px; border-radius: 8px; font-weight: 600; }
   .tab-wahl span.t { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .tabs { display: none; }
@@ -323,10 +344,11 @@ code.inline { font-size: .92em; padding: 0 4px; border-radius: 4px; background: 
   .karten { grid-template-columns: minmax(0, 1fr); }
   .einstieg { flex-direction: column; }
   .einstieg-bild { flex: none; padding: 24px 20px; border-right: 0; border-bottom: 1px solid var(--linie); gap: 12px; }
+  .marke-gross { font-size: 22px; gap: 12px; }
   .einstieg-bild h1 { font-size: 28px; }
   .einstieg-bild p, .einstieg-bild .term-deko, .einstieg-bild .platz { display: none; }
   .einstieg-form { width: 100%; padding: 24px 20px calc(32px + var(--unten)); justify-content: flex-start; }
-  .raster2 { grid-template-columns: 1fr; }
+  .raster2 { grid-template-columns: minmax(0, 1fr); }
   .palette { top: 0; left: 0; transform: none; width: 100%; height: var(--app-hoehe, 100%); border-radius: 0; border: 0; }
   .palette-teile { flex-direction: column; }
   .palette-liste { width: auto; border-right: 0; flex: 1; }
@@ -395,3 +417,6 @@ code.inline { font-size: .92em; padding: 0 4px; border-radius: 4px; background: 
     right: calc(8px + env(safe-area-inset-right, 0px));
   }
 }
+
+/* Tastenleiste nur bei verbundenem Terminal (Startseite ohne Sitzung: keine Sondertasten) */
+.tasten.ohne-terminal { display: none !important; }

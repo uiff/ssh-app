@@ -393,31 +393,24 @@ func TestHerunterladenLaenge(t *testing.T) {
 
 // ---------- Eingebetteter SFTP-Server mit Stoerungen ----------
 
-// SFTP-Pakete und -Codes (draft-ietf-secsh-filexfer-02), soweit die Stoerregeln sie brauchen.
+// Weitere SFTP-Pakete und -Codes fuer die Stoerregeln (die uebrigen stehen in dateien.go).
 const (
-	fxpInit     = 1
-	fxpVersion  = 2
-	fxpOpen     = 3
-	fxpClose    = 4
-	fxpRead     = 5
-	fxpWrite    = 6
-	fxpFstat    = 8
-	fxpFsetstat = 10
-	fxpRename   = 18
-	fxpStatus   = 101
-	fxpHandle   = 102
-	fxpExtended = 200
+	fxpRead   = 5
+	fxpWrite  = 6
+	fxpFstat  = 8
+	fxpRemove = 13
+	fxpRmdir  = 15 // pkg/sftp loescht damit auch gewoehnliche Dateien
+	fxpRename = 18
 
-	fxfWrite = 0x02
 	fxfCreat = 0x08
 	fxfTrunc = 0x10
 
-	fxPermissionDenied = 3
-	fxFailure          = 4
+	fxFailure = 4
 )
 
 // anfrage beschreibt eine SFTP-Anfrage fuer eine Stoerregel. Bei Anfragen auf einen
-// Handle (WRITE, CLOSE …) stehen pfad und pflags des zugehoerigen OPEN.
+// Handle (WRITE, CLOSE …) stehen pfad und pflags des zugehoerigen OPEN, bei «copy-data»
+// pfad (Quelle) und nach (Ziel) der beiden Handles.
 type anfrage struct {
 	typ        byte
 	pfad, nach string // nach: RENAME und posix-rename
@@ -428,33 +421,81 @@ type anfrage struct {
 // stoerung beantwortet eine Anfrage mit einem SFTP-Statuscode, statt sie weiterzugeben (0: weitergeben).
 type stoerung func(a anfrage) uint32
 
-func paketLesen(r io.Reader) ([]byte, error) {
-	var l [4]byte
-	if _, err := io.ReadFull(r, l[:]); err != nil {
-		return nil, err
+// paketZaehler merkt sich alle Anfragen, die beim Server ankommen sollen.
+type paketZaehler struct {
+	mu   sync.Mutex
+	alle []anfrage
+}
+
+func (z *paketZaehler) merken(a anfrage) {
+	z.mu.Lock()
+	z.alle = append(z.alle, a)
+	z.mu.Unlock()
+}
+
+// zahl zaehlt Anfragen vom Typ typ (auf pfad, leer: auf allen Pfaden).
+func (z *paketZaehler) zahl(typ byte, pfad string) int {
+	z.mu.Lock()
+	defer z.mu.Unlock()
+	n := 0
+	for _, a := range z.alle {
+		if a.typ == typ && (pfad == "" || a.pfad == pfad) {
+			n++
+		}
 	}
-	b := make([]byte, binary.BigEndian.Uint32(l[:]))
-	_, err := io.ReadFull(r, b)
-	return b, err
+	return n
 }
 
-func paketSchreiben(w io.Writer, b []byte) error {
-	_, err := w.Write(append(binary.BigEndian.AppendUint32(nil, uint32(len(b))), b...))
-	return err
+// stoerOptionen: wie der Zwischenhaendler den eingebetteten SFTP-Server veraendert.
+type stoerOptionen struct {
+	ohnePosix bool          // Erweiterungen verschweigen (wie ein Dienst ohne posix-rename)
+	mitKopie  bool          // «copy-data» anbieten und selbst ausfuehren (wie OpenSSH ab 9.0)
+	regel     stoerung      // ausgewaehlte Anfragen mit einem Fehler beantworten
+	zaehler   *paketZaehler // Anfragen mitschreiben
+	// trennen: Bei dieser Anfrage bricht die Verbindung ab (sie kommt nie beim Server an).
+	trennen func(a anfrage) bool
 }
 
-func zeichenkette(b []byte) (string, []byte) {
-	if len(b) < 4 || uint32(len(b)-4) < binary.BigEndian.Uint32(b) {
-		return "", nil
+func statusPaket(id, code uint32) []byte {
+	b := binary.BigEndian.AppendUint32([]byte{fxpStatus}, id)
+	b = binary.BigEndian.AppendUint32(b, code)
+	b = binary.BigEndian.AppendUint32(b, 0)    // Text
+	return binary.BigEndian.AppendUint32(b, 0) // Sprache
+}
+
+// kopieAusfuehren macht, was «copy-data» bei OpenSSH tut: ab von_ab lesen (laenge 0: bis zum
+// Ende) und ab nach_ab in die offene Datei schreiben, ohne sie zu kuerzen.
+func kopieAusfuehren(von, nach string, vonAb, laenge, nachAb uint64) uint32 {
+	q, err := os.Open(von)
+	if err != nil {
+		return fxFailure
 	}
-	n := binary.BigEndian.Uint32(b)
-	return string(b[4 : 4+n]), b[4+n:]
+	defer q.Close()
+	z, err := os.OpenFile(nach, os.O_WRONLY, 0)
+	if err != nil {
+		return fxFailure
+	}
+	defer z.Close()
+	if _, err := q.Seek(int64(vonAb), io.SeekStart); err != nil {
+		return fxFailure
+	}
+	if _, err := z.Seek(int64(nachAb), io.SeekStart); err != nil {
+		return fxFailure
+	}
+	if laenge == 0 {
+		_, err = io.Copy(z, q)
+	} else {
+		_, err = io.CopyN(z, q, int64(laenge))
+	}
+	if err != nil {
+		return fxFailure
+	}
+	return fxOK
 }
 
-// stoerClient verbindet einen SFTP-Client ueber einen Zwischenhaendler mit einem eingebetteten
-// SFTP-Server (lokales Dateisystem). ohnePosix verschweigt dem Client die Erweiterungen (wie
-// ein Dienst ohne posix-rename), regel beantwortet ausgewaehlte Anfragen mit einem Fehler.
-func stoerClient(t *testing.T, ohnePosix bool, regel stoerung) *sftp.Client {
+// stoerVerbindung verbindet ueber einen Zwischenhaendler mit einem eingebetteten SFTP-Server
+// (lokales Dateisystem) und liefert die rohe Verbindung (SFTP-Pakete).
+func stoerVerbindung(t *testing.T, opt stoerOptionen) io.ReadWriteCloser {
 	t.Helper()
 	appSeite, zuApp := net.Pipe()
 	zuServer, serverSeite := net.Pipe()
@@ -487,6 +528,7 @@ func stoerClient(t *testing.T, ohnePosix bool, regel stoerung) *sftp.Client {
 			}
 			a := anfrage{typ: b[0]}
 			id, rest := binary.BigEndian.Uint32(b[1:5]), b[5:]
+			var kopie [3]uint64 // copy-data: Lese-Anfang, Laenge, Schreib-Anfang
 			switch b[0] {
 			case fxpOpen:
 				a.pfad, rest = zeichenkette(rest)
@@ -501,8 +543,24 @@ func stoerClient(t *testing.T, ohnePosix bool, regel stoerung) *sftp.Client {
 				a.nach, _ = zeichenkette(rest)
 			case fxpExtended:
 				a.ext, rest = zeichenkette(rest)
-				a.pfad, rest = zeichenkette(rest)
-				a.nach, _ = zeichenkette(rest)
+				if a.ext == kopieDaten {
+					var lh, sh string
+					lh, rest = zeichenkette(rest)
+					if len(rest) >= 16 {
+						kopie[0], kopie[1] = binary.BigEndian.Uint64(rest), binary.BigEndian.Uint64(rest[8:])
+						rest = rest[16:]
+					}
+					sh, rest = zeichenkette(rest)
+					if len(rest) >= 8 {
+						kopie[2] = binary.BigEndian.Uint64(rest)
+					}
+					mu.Lock()
+					a.pfad, a.nach = handles[lh].pfad, handles[sh].pfad
+					mu.Unlock()
+				} else {
+					a.pfad, rest = zeichenkette(rest)
+					a.nach, _ = zeichenkette(rest)
+				}
 			case fxpClose, fxpRead, fxpWrite, fxpFstat, fxpFsetstat:
 				h, _ := zeichenkette(rest)
 				mu.Lock()
@@ -513,27 +571,40 @@ func stoerClient(t *testing.T, ohnePosix bool, regel stoerung) *sftp.Client {
 			default:
 				a.pfad, _ = zeichenkette(rest)
 			}
-			if regel != nil {
-				if code := regel(a); code != 0 {
-					mu.Lock()
-					delete(offen, id)
-					mu.Unlock()
-					antwort := binary.BigEndian.AppendUint32([]byte{fxpStatus}, id)
-					antwort = binary.BigEndian.AppendUint32(antwort, code)
-					antwort = binary.BigEndian.AppendUint32(antwort, 0) // Text
-					antwort = binary.BigEndian.AppendUint32(antwort, 0) // Sprache
-					if anApp(antwort) != nil {
+			if opt.zaehler != nil {
+				opt.zaehler.merken(a)
+			}
+			if opt.trennen != nil && opt.trennen(a) {
+				zuApp.Close()
+				return
+			}
+			code := uint32(0)
+			if opt.regel != nil {
+				code = opt.regel(a)
+			}
+			if code == 0 && opt.mitKopie && a.typ == fxpExtended && a.ext == kopieDaten {
+				if code = kopieAusfuehren(a.pfad, a.nach, kopie[0], kopie[1], kopie[2]); code == fxOK {
+					if anApp(statusPaket(id, fxOK)) != nil {
 						return
 					}
 					continue
 				}
+			}
+			if code != 0 {
+				mu.Lock()
+				delete(offen, id)
+				mu.Unlock()
+				if anApp(statusPaket(id, code)) != nil {
+					return
+				}
+				continue
 			}
 			if paketSchreiben(zuServer, b) != nil {
 				return
 			}
 		}
 	}()
-	// Server -> App: Erweiterungen verschweigen, Handles den OPEN-Anfragen zuordnen.
+	// Server -> App: Erweiterungen verschweigen oder ergaenzen, Handles den OPEN-Anfragen zuordnen.
 	go func() {
 		defer zuApp.Close()
 		for {
@@ -542,8 +613,13 @@ func stoerClient(t *testing.T, ohnePosix bool, regel stoerung) *sftp.Client {
 				return
 			}
 			switch {
-			case b[0] == fxpVersion && ohnePosix && len(b) >= 5:
-				b = b[:5] // nur die Version, keine Erweiterungen
+			case b[0] == fxpVersion && len(b) >= 5:
+				if opt.ohnePosix {
+					b = b[:5] // nur die Version, keine Erweiterungen
+				}
+				if opt.mitKopie {
+					b = append(sftpFelder(b).text(kopieDaten), sftpFelder(nil).text("1")...)
+				}
 			case b[0] == fxpHandle && len(b) >= 5:
 				id := binary.BigEndian.Uint32(b[1:5])
 				h, _ := zeichenkette(b[5:])
@@ -559,11 +635,25 @@ func stoerClient(t *testing.T, ohnePosix bool, regel stoerung) *sftp.Client {
 			}
 		}
 	}()
-	c, err := sftp.NewClientPipe(appSeite, appSeite)
+	t.Cleanup(func() { appSeite.Close(); serverSeite.Close() })
+	return appSeite
+}
+
+// stoerClient: SFTP-Client ueber stoerVerbindung. ohnePosix verschweigt dem Client die
+// Erweiterungen, regel beantwortet ausgewaehlte Anfragen mit einem Fehler.
+func stoerClient(t *testing.T, ohnePosix bool, regel stoerung) *sftp.Client {
+	t.Helper()
+	return stoerClientMit(t, stoerOptionen{ohnePosix: ohnePosix, regel: regel})
+}
+
+func stoerClientMit(t *testing.T, opt stoerOptionen) *sftp.Client {
+	t.Helper()
+	k := stoerVerbindung(t, opt)
+	c, err := sftp.NewClientPipe(k, k)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { c.Close(); appSeite.Close(); serverSeite.Close() })
+	t.Cleanup(func() { c.Close() })
 	return c
 }
 
@@ -637,19 +727,19 @@ func TestHochladenOrdnerOhneSchreibrecht(t *testing.T) {
 		}
 		return 0
 	})
-	if err := hochladenEine(c, verz, "datei.txt", true, strings.NewReader("direkt")); err != nil {
+	if err := hochladenEine(c, verz, "datei.txt", true, strings.NewReader("direkt"), ersetzHilfe{}); err != nil {
 		t.Fatalf("direkt schreiben: %v", err)
 	}
 	if ino2, _, _, _ := inode(t, p); inhalt(t, p) != "direkt" || ino2 != ino {
 		t.Fatalf("Inhalt %q, Inode %d->%d", inhalt(t, p), ino, ino2)
 	}
 	// Abbruch in diesem Fall: eigene Meldung (die Datei ist jetzt unvollstaendig).
-	err := hochladenEine(c, verz, "datei.txt", true, &abbrechenderLeser{})
+	err := hochladenEine(c, verz, "datei.txt", true, &abbrechenderLeser{}, ersetzHilfe{})
 	if _, k := meldungVon(err); k != "dateien.hochladen.abbruchDirekt" || !errors.Is(err, errUebertragungAbgebrochen) {
 		t.Fatalf("Abbruch beim direkten Schreiben: %v (%s)", err, k)
 	}
 	// Eine neue Datei braucht das Schreibrecht im Ordner: keine Hintertuer.
-	if err := hochladenEine(c, verz, "neu.txt", false, strings.NewReader("x")); !errors.Is(err, os.ErrPermission) {
+	if err := hochladenEine(c, verz, "neu.txt", false, strings.NewReader("x"), ersetzHilfe{}); !errors.Is(err, os.ErrPermission) {
 		t.Fatalf("neue Datei ohne Ordnerrecht: %v", err)
 	}
 }
@@ -665,7 +755,7 @@ func TestHochladenFremdeDateiAbgelehnt(t *testing.T) {
 		}
 		return 0
 	})
-	err := hochladenEine(c, verz, "fremd.conf", true, strings.NewReader("neu"))
+	err := hochladenEine(c, verz, "fremd.conf", true, strings.NewReader("neu"), ersetzHilfe{})
 	if df, k := meldungVon(err); k != "dateien.hochladen.keinSchreibrecht" || df.code != http.StatusForbidden {
 		t.Fatalf("fremde Datei: %v", err)
 	}
@@ -677,7 +767,7 @@ func TestHochladenFremdeDateiAbgelehnt(t *testing.T) {
 	}
 }
 
-// Laesst sich die Datei nicht zum Schreiben oeffnen (z.B. «Text file busy»), ersetzt das
+// Laesst sich die Datei nicht zum Schreiben oeffnen (z. B. «Text file busy»), ersetzt das
 // Hochladen sie per Umbenennen und uebernimmt Rechte und Besitzer.
 func TestHochladenBelegteDateiPerUmbenennen(t *testing.T) {
 	for _, ohnePosix := range []bool{false, true} {
@@ -692,7 +782,7 @@ func TestHochladenBelegteDateiPerUmbenennen(t *testing.T) {
 			}
 			return 0
 		})
-		if err := hochladenEine(c, verz, "dienst", true, strings.NewReader("v2")); err != nil {
+		if err := hochladenEine(c, verz, "dienst", true, strings.NewReader("v2"), ersetzHilfe{}); err != nil {
 			t.Fatalf("ohnePosix=%v: %v", ohnePosix, err)
 		}
 		_, uid, gid, mode := inode(t, p)
@@ -744,7 +834,7 @@ func TestHochladenEinsetzenScheitert(t *testing.T) {
 		}
 		return 0
 	})
-	err := hochladenEine(c, verz, "gross.bin", true, strings.NewReader("NEU-VOLLSTAENDIG"))
+	err := hochladenEine(c, verz, "gross.bin", true, strings.NewReader("NEU-VOLLSTAENDIG"), ersetzHilfe{})
 	df, k := meldungVon(err)
 	reste := tmpReste(t, verz)
 	if k != "dateien.hochladen.einsetzenFehler" || len(reste) != 1 {
@@ -752,6 +842,392 @@ func TestHochladenEinsetzenScheitert(t *testing.T) {
 	}
 	if inhalt(t, reste[0]) != "NEU-VOLLSTAENDIG" || df.m.Werte[1] != filepath.Base(reste[0]) {
 		t.Fatalf("vollstaendige Fassung: %q, Meldung nennt %v", inhalt(t, reste[0]), df.m.Werte)
+	}
+}
+
+// ---------- Ersetzen: Kopie auf dem Host, Einsetzen abwarten ----------
+
+// kopieKanal liefert fuer ersetzHilfe.kanal je Aufruf einen frischen Kanal zum eingebetteten
+// SFTP-Server mit «copy-data» (regel wie bei stoerClient).
+func kopieKanal(t *testing.T, regel stoerung) func() (io.ReadWriteCloser, error) {
+	return func() (io.ReadWriteCloser, error) {
+		return stoerVerbindung(t, stoerOptionen{mitKopie: true, regel: regel}), nil
+	}
+}
+
+// hostKopieren pruefen: kuerzere und laengere neue Fassung, die Datei bleibt dieselbe.
+func pruefeHostKopie(t *testing.T, kanal func() io.ReadWriter) {
+	t.Helper()
+	verz := t.TempDir()
+	for _, f := range []struct{ alt, neu string }{
+		{"ALTER-LANGER-INHALT-0123456789", "neu"},
+		{"alt", "NEUER-INHALT-LAENGER-ALS-VORHER"},
+		{"gleich", "GLEICH"},
+		{"etwas", ""},
+	} {
+		von, nach := filepath.Join(verz, "von"), filepath.Join(verz, "nach")
+		os.WriteFile(von, []byte(f.neu), 0o600)
+		os.WriteFile(nach, []byte(f.alt), 0o640)
+		ino, _, _, _ := inode(t, nach)
+		beruehrt, err := hostKopieren(kanal(), von, nach, int64(len(f.neu)))
+		if err != nil || !beruehrt {
+			t.Fatalf("%q -> %q: %v (beruehrt %v)", f.alt, f.neu, err, beruehrt)
+		}
+		if ino2, _, _, mode := inode(t, nach); inhalt(t, nach) != f.neu || ino2 != ino || mode.Perm() != 0o640 {
+			t.Fatalf("%q -> %q: Inhalt %q, Inode %d->%d, %v", f.alt, f.neu, inhalt(t, nach), ino, ino2, mode)
+		}
+	}
+	// Fehlt die Quelle, bleibt das Ziel unberuehrt.
+	os.WriteFile(filepath.Join(verz, "nach"), []byte("bleibt"), 0o644)
+	if beruehrt, err := hostKopieren(kanal(), filepath.Join(verz, "fehlt"), filepath.Join(verz, "nach"), 3); beruehrt || !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fehlende Quelle: %v (beruehrt %v)", err, beruehrt)
+	}
+	if inhalt(t, filepath.Join(verz, "nach")) != "bleibt" {
+		t.Fatal("Ziel trotz fehlender Quelle veraendert")
+	}
+}
+
+func TestHostKopierenEmuliert(t *testing.T) {
+	pruefeHostKopie(t, func() io.ReadWriter { return stoerVerbindung(t, stoerOptionen{mitKopie: true}) })
+
+	// Ein Dienst ohne «copy-data» (wie pkg/sftp oder OpenSSH vor 9.0): nichts beruehrt.
+	verz := t.TempDir()
+	von, nach := filepath.Join(verz, "von"), filepath.Join(verz, "nach")
+	os.WriteFile(von, []byte("neu"), 0o644)
+	os.WriteFile(nach, []byte("alt"), 0o644)
+	if beruehrt, err := hostKopieren(stoerVerbindung(t, stoerOptionen{}), von, nach, 3); beruehrt || !errors.Is(err, errKeineHostKopie) || inhalt(t, nach) != "alt" {
+		t.Fatalf("ohne copy-data: %v (beruehrt %v) %q", err, beruehrt, inhalt(t, nach))
+	}
+	// Kennt der Dienst die Erweiterung, lehnt sie aber ab (SSH_FX_OP_UNSUPPORTED): ebenso.
+	nein := func(a anfrage) uint32 {
+		if a.typ == fxpExtended && a.ext == kopieDaten {
+			return fxOpUnsupported
+		}
+		return 0
+	}
+	if beruehrt, err := hostKopieren(stoerVerbindung(t, stoerOptionen{mitKopie: true, regel: nein}), von, nach, 3); beruehrt || !errors.Is(err, errKeineHostKopie) {
+		t.Fatalf("copy-data abgelehnt: %v (beruehrt %v)", err, beruehrt)
+	}
+}
+
+// Gegen den echten OpenSSH-sftp-server (lokal als Programm ueber Pipes, ohne SSH und ohne
+// Netz), falls installiert: prueft das Paketformat von «copy-data».
+func TestHostKopierenOpenSSH(t *testing.T) {
+	prog := ""
+	for _, p := range []string{"/usr/lib/openssh/sftp-server", "/usr/libexec/openssh/sftp-server", "/usr/libexec/sftp-server", "/usr/lib/ssh/sftp-server"} {
+		if _, err := os.Stat(p); err == nil {
+			prog = p
+			break
+		}
+	}
+	if prog == "" {
+		t.Skip("kein OpenSSH-sftp-server installiert")
+	}
+	var probe io.ReadWriter
+	start := func() io.ReadWriter {
+		cmd := exec.Command(prog)
+		ein, _ := cmd.StdinPipe()
+		aus, _ := cmd.StdoutPipe()
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("sftp-server: %v", err)
+		}
+		t.Cleanup(func() { ein.Close(); cmd.Process.Kill(); cmd.Wait() })
+		return struct {
+			io.Reader
+			io.Writer
+		}{aus, ein}
+	}
+	probe = start()
+	verz := t.TempDir()
+	os.WriteFile(filepath.Join(verz, "a"), []byte("x"), 0o644)
+	os.WriteFile(filepath.Join(verz, "b"), []byte("y"), 0o644)
+	if _, err := hostKopieren(probe, filepath.Join(verz, "a"), filepath.Join(verz, "b"), 1); errors.Is(err, errKeineHostKopie) {
+		t.Skipf("%s kennt copy-data nicht (OpenSSH vor 9.0)", prog)
+	}
+	pruefeHostKopie(t, start)
+}
+
+// Kann der Host kopieren, geht die Datei beim Ersetzen nur einmal ueber die Verbindung:
+// in die temporaere Datei, danach nichts mehr zurueck und nichts mehr in die Datei selbst.
+// Ohne «copy-data» kopiert die App (lesen und schreiben): so dokumentiert in fassungEinsetzen.
+func TestHochladenErsetzenKopiertAufDemHost(t *testing.T) {
+	for _, mitKopie := range []bool{true, false} {
+		verz := t.TempDir()
+		p := filepath.Join(verz, "gross.bin")
+		os.WriteFile(p, bytes.Repeat([]byte("A"), 1000), 0o640)
+		os.Link(p, filepath.Join(verz, "zweiter-name.bin"))
+		ino, _, _, _ := inode(t, p)
+		neu := bytes.Repeat([]byte("B"), 4<<20)
+		z := &paketZaehler{}
+		c := stoerClientMit(t, stoerOptionen{zaehler: z})
+		angemeldet, abgemeldet := 0, 0
+		hilfe := ersetzHilfe{anmelden: func() func() { angemeldet++; return func() { abgemeldet++ } }}
+		if mitKopie {
+			hilfe.kanal = kopieKanal(t, nil)
+		}
+		if err := hochladenEine(c, verz, "gross.bin", true, bytes.NewReader(neu), hilfe); err != nil {
+			t.Fatalf("mitKopie=%v: %v", mitKopie, err)
+		}
+		ino2, _, _, mode := inode(t, p)
+		if inhalt(t, p) != string(neu) || inhalt(t, filepath.Join(verz, "zweiter-name.bin")) != string(neu) || ino2 != ino || mode.Perm() != 0o640 {
+			t.Fatalf("mitKopie=%v: %d Bytes, Inode %d->%d, %v", mitKopie, len(inhalt(t, p)), ino, ino2, mode)
+		}
+		if r := tmpReste(t, verz); len(r) > 0 || angemeldet != 1 || abgemeldet != 1 {
+			t.Fatalf("mitKopie=%v: Reste %v, angemeldet %d/%d", mitKopie, r, angemeldet, abgemeldet)
+		}
+		gelesen, inDatei := z.zahl(fxpRead, ""), z.zahl(fxpWrite, p)
+		if mitKopie && (gelesen != 0 || inDatei != 0) {
+			t.Fatalf("mit copy-data: %d READ, %d WRITE in die Datei ueber die Verbindung", gelesen, inDatei)
+		}
+		if !mitKopie && (gelesen == 0 || inDatei == 0) {
+			t.Fatalf("ohne copy-data: %d READ, %d WRITE — erwartet die Kopie ueber die App", gelesen, inDatei)
+		}
+	}
+}
+
+// Scheitert die Kopie auf dem Host, kopiert die App; scheitert auch das, bleibt die
+// vollstaendige Fassung liegen und die Meldung nennt sie.
+func TestHochladenHostKopieScheitert(t *testing.T) {
+	verz := t.TempDir()
+	p := filepath.Join(verz, "datei.bin")
+	kopieScheitert := func(a anfrage) uint32 {
+		if a.typ == fxpExtended && a.ext == kopieDaten {
+			return fxFailure
+		}
+		return 0
+	}
+	kanalFehlt := func() (io.ReadWriteCloser, error) { return nil, errors.New("Kanal abgelehnt") }
+	for i, kanal := range []func() (io.ReadWriteCloser, error){kopieKanal(t, kopieScheitert), kanalFehlt, func() (io.ReadWriteCloser, error) {
+		return stoerVerbindung(t, stoerOptionen{}), nil // Dienst ohne copy-data
+	}} {
+		os.WriteFile(p, []byte("ALT"), 0o644)
+		inhaltNeu := fmt.Sprintf("NEU-%d", i)
+		if err := hochladenEine(stoerClient(t, false, nil), verz, "datei.bin", true, strings.NewReader(inhaltNeu), ersetzHilfe{kanal: kanal}); err != nil || inhalt(t, p) != inhaltNeu {
+			t.Fatalf("Fall %d: %v, Inhalt %q", i, err, inhalt(t, p))
+		}
+		if r := tmpReste(t, verz); len(r) > 0 {
+			t.Fatalf("Fall %d: Reste %v", i, r)
+		}
+	}
+
+	// Kopie auf dem Host scheitert mittendrin, und die App kann die Datei nicht mehr oeffnen.
+	os.WriteFile(p, []byte("ALT"), 0o644)
+	c := stoerClient(t, false, func(a anfrage) uint32 {
+		if a.typ == fxpOpen && a.pfad == p && a.pflags&fxfTrunc != 0 {
+			return fxFailure
+		}
+		return 0
+	})
+	err := hochladenEine(c, verz, "datei.bin", true, strings.NewReader("NEU-VOLLSTAENDIG"), ersetzHilfe{kanal: kopieKanal(t, kopieScheitert)})
+	df, k := meldungVon(err)
+	reste := tmpReste(t, verz)
+	if k != "dateien.hochladen.einsetzenFehler" || len(reste) != 1 || inhalt(t, reste[0]) != "NEU-VOLLSTAENDIG" || df.m.Werte[1] != filepath.Base(reste[0]) {
+		t.Fatalf("Fehler %v (%s), Reste %v", err, k, reste)
+	}
+}
+
+// EinsetzenAbwarten wartet auf das Einsetzen in der Sitzung, nicht auf andere Sitzungen
+// oder andere Server, und gibt nach der Frist auf.
+func TestEinsetzenAbwarten(t *testing.T) {
+	s, anderer := &Server{}, &Server{}
+	verz := t.TempDir()
+	p := filepath.Join(verz, "x.conf")
+	os.WriteFile(p, []byte("ALT"), 0o644)
+	laeuft := make(chan struct{})
+	var einmal sync.Once
+	langsam := func(a anfrage) uint32 {
+		if a.typ == fxpExtended && a.ext == kopieDaten {
+			einmal.Do(func() { close(laeuft) })
+			time.Sleep(300 * time.Millisecond)
+		}
+		return 0
+	}
+	hilfe := ersetzHilfe{kanal: kopieKanal(t, langsam), anmelden: func() func() { return s.einsetzenAnmelden("sitzung-1") }}
+	c := stoerClient(t, false, nil)
+	fertig := make(chan error, 1)
+	go func() { fertig <- hochladenEine(c, verz, "x.conf", true, strings.NewReader("NEU"), hilfe) }()
+	<-laeuft
+	if n := s.einsetzenLaufend("sitzung-1"); n != 1 {
+		t.Fatalf("angemeldet: %d", n)
+	}
+	if !s.EinsetzenAbwarten("sitzung-2", time.Second) || !anderer.EinsetzenAbwarten("", 10*time.Millisecond) {
+		t.Fatal("wartet auf fremdes Einsetzen")
+	}
+	if s.EinsetzenAbwarten("sitzung-1", 20*time.Millisecond) {
+		t.Fatal("Frist nicht eingehalten")
+	}
+	if !s.EinsetzenAbwarten("", 10*time.Second) {
+		t.Fatal("Einsetzen nicht fertig")
+	}
+	if inhalt(t, p) != "NEU" {
+		t.Fatalf("nach dem Warten: %q", inhalt(t, p))
+	}
+	if err := <-fertig; err != nil || s.einsetzenLaufend("") != 0 {
+		t.Fatalf("Ergebnis %v, laufend %d", err, s.einsetzenLaufend(""))
+	}
+}
+
+// Das Aufraeumen der Zwischendatei gehoert noch zur Wartephase: Kehrt EinsetzenAbwarten
+// zurueck, ist sie schon entfernt — «Sitzung beenden» und das Herunterfahren schliessen die
+// Verbindung also nicht mitten im Remove (sonst bliebe eine versteckte Vollkopie liegen).
+func TestEinsetzenAbwartenSamtAufraeumen(t *testing.T) {
+	s := &Server{}
+	verz := t.TempDir()
+	p := filepath.Join(verz, "x.conf")
+	os.WriteFile(p, []byte("ALT"), 0o644)
+	for _, mitKopie := range []bool{true, false} {
+		raeumtAuf := make(chan struct{})
+		var einmal sync.Once
+		langsamWeg := func(a anfrage) uint32 {
+			if (a.typ == fxpRemove || a.typ == fxpRmdir) && strings.HasSuffix(a.pfad, ".sshapp-upload") {
+				einmal.Do(func() { close(raeumtAuf) })
+				time.Sleep(300 * time.Millisecond)
+			}
+			return 0
+		}
+		hilfe := ersetzHilfe{anmelden: func() func() { return s.einsetzenAnmelden("sitzung-1") }}
+		if mitKopie {
+			hilfe.kanal = kopieKanal(t, nil)
+		}
+		fertig := make(chan error, 1)
+		go func() {
+			fertig <- hochladenEine(stoerClient(t, false, langsamWeg), verz, "x.conf", true, strings.NewReader("NEU"), hilfe)
+		}()
+		<-raeumtAuf
+		if !s.EinsetzenAbwarten("sitzung-1", 10*time.Second) {
+			t.Fatalf("mitKopie=%v: Einsetzen nicht fertig", mitKopie)
+		}
+		if r := tmpReste(t, verz); len(r) > 0 || inhalt(t, p) != "NEU" {
+			t.Fatalf("mitKopie=%v: nach dem Warten Reste %v, Inhalt %q", mitKopie, r, inhalt(t, p))
+		}
+		if err := <-fertig; err != nil {
+			t.Fatalf("mitKopie=%v: %v", mitKopie, err)
+		}
+		os.WriteFile(p, []byte("ALT"), 0o644)
+	}
+}
+
+// hochladenRoh laedt ohne testing.T hoch (fuer Goroutinen).
+func hochladenRoh(ts *httptest.Server, c *client, id, ziel, name string, daten []byte) (int, hochAntwort, error) {
+	var mp bytes.Buffer
+	mw := multipart.NewWriter(&mp)
+	fw, _ := mw.CreateFormFile("datei", name)
+	fw.Write(daten)
+	mw.Close()
+	q := url.Values{"pfad": {ziel}, "ersetzen": {name}}
+	req, _ := http.NewRequest("POST", ts.URL+"/api/sitzungen/"+id+"/hochladen?"+q.Encode(), &mp)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("X-SSH-App", "1")
+	res, err := c.h.Do(req)
+	if err != nil {
+		return 0, hochAntwort{}, err
+	}
+	defer res.Body.Close()
+	var a hochAntwort
+	json.NewDecoder(res.Body).Decode(&a)
+	return res.StatusCode, a, nil
+}
+
+// Ueber HTTP und den eingebetteten SSH-Server: Endet die Sitzung waehrend des Einsetzens,
+// erfaehrt der Browser, wo die vollstaendige Fassung liegt. Wartet «Sitzung beenden» erst
+// mit EinsetzenAbwarten, kommt die Datei vollstaendig an.
+func TestHochladenSitzungEndetBeimEinsetzen(t *testing.T) {
+	neu := bytes.Repeat([]byte("B"), 48<<20)
+	for _, warten := range []bool{false, true} {
+		ts, c, id, s := dateiSitzung(t)
+		verz := t.TempDir()
+		p := filepath.Join(verz, "gross.bin")
+		os.WriteFile(p, []byte("ORIGINAL"), 0o644)
+		type ergebnis struct {
+			code int
+			a    hochAntwort
+			err  error
+		}
+		fertig := make(chan ergebnis, 1)
+		go func() {
+			code, a, err := hochladenRoh(ts, c, id, verz, "gross.bin", neu)
+			fertig <- ergebnis{code, a, err}
+		}()
+		var e ergebnis
+		gesehen := false
+	warte:
+		for {
+			select {
+			case e = <-fertig:
+				break warte
+			default:
+			}
+			if s.einsetzenLaufend(id) > 0 {
+				gesehen = true
+				if warten && !s.EinsetzenAbwarten(id, time.Minute) {
+					t.Fatal("Einsetzen nicht fertig geworden")
+				}
+				s.tm.Entfernen(id) // wie «Sitzung beenden»
+				e = <-fertig
+				break warte
+			}
+			time.Sleep(time.Millisecond)
+		}
+		if e.err != nil || !gesehen {
+			t.Fatalf("warten=%v: %v, Phase gesehen %v", warten, e.err, gesehen)
+		}
+		if warten {
+			if e.code != 200 || inhalt(t, p) != string(neu) || len(tmpReste(t, verz)) > 0 {
+				t.Fatalf("mit Warten: %d %+v, %d Bytes", e.code, e.a, len(inhalt(t, p)))
+			}
+			continue
+		}
+		if e.code == 200 {
+			t.Log("Einsetzen war vor dem Beenden schon fertig")
+			continue
+		}
+		// Je nach Zeitpunkt: «liess sich nicht vollstaendig schreiben» oder «ist unveraendert»
+		// (Verbindung weg, bevor die Datei beruehrt war). Beide nennen die vollstaendige Fassung.
+		reste := tmpReste(t, verz)
+		if len(reste) != 1 || inhalt(t, reste[0]) != string(neu) || !strings.Contains(e.a.Fehler, filepath.Base(reste[0])) {
+			t.Fatalf("ohne Warten: %d %q, Reste %v", e.code, e.a.Fehler, reste)
+		}
+		if strings.Contains(e.a.Fehler, "unverändert") && inhalt(t, p) != "ORIGINAL" {
+			t.Fatalf("meldet «unverändert», aber die Datei hat %d Bytes", len(inhalt(t, p)))
+		}
+	}
+}
+
+// Bricht die Verbindung beim Einsetzen ab, sagt die Meldung, wie es um die Datei steht.
+func TestHochladenEinsetzenVerbindungWeg(t *testing.T) {
+	verz := t.TempDir()
+	p := filepath.Join(verz, "x.conf")
+
+	// Vor dem Kuerzen (Lesen der Fassung scheitert, Aufraeumen auch): Original unveraendert.
+	os.WriteFile(p, []byte("ALT"), 0o644)
+	c := stoerClient(t, false, func(a anfrage) uint32 {
+		weg := a.typ == fxpRemove || a.typ == fxpRmdir
+		if strings.HasSuffix(a.pfad, ".sshapp-upload") && (weg || (a.typ == fxpOpen && a.pflags == fxfRead)) {
+			return fxFailure
+		}
+		return 0
+	})
+	err := hochladenEine(c, verz, "x.conf", true, strings.NewReader("NEU-VOLLSTAENDIG"), ersetzHilfe{})
+	df, k := meldungVon(err)
+	reste := tmpReste(t, verz)
+	if k != "dateien.hochladen.einsetzenNichtBegonnen" || inhalt(t, p) != "ALT" || len(reste) != 1 || inhalt(t, reste[0]) != "NEU-VOLLSTAENDIG" || df.m.Werte[1] != filepath.Base(reste[0]) {
+		t.Fatalf("vor dem Kuerzen: %v (%s), %q, Reste %v", err, k, inhalt(t, p), reste)
+	}
+	os.Remove(reste[0])
+
+	// Beim Kuerzen ohne Antwort: Ob der Host schon gekuerzt hat, ist offen, also die
+	// vorsichtige Meldung mit der vollstaendigen Fassung.
+	c = stoerClientMit(t, stoerOptionen{trennen: func(a anfrage) bool {
+		return a.typ == fxpOpen && a.pfad == p && a.pflags&fxfTrunc != 0
+	}})
+	err = hochladenEine(c, verz, "x.conf", true, strings.NewReader("NEU-VOLLSTAENDIG"), ersetzHilfe{})
+	df, k = meldungVon(err)
+	reste = tmpReste(t, verz)
+	if k != "dateien.hochladen.einsetzenFehler" || len(reste) != 1 || inhalt(t, reste[0]) != "NEU-VOLLSTAENDIG" || df.m.Werte[1] != filepath.Base(reste[0]) {
+		t.Fatalf("beim Kuerzen: %v (%s), Reste %v", err, k, reste)
+	}
+	if code, text := sftpText("en", err); code != http.StatusBadGateway || !strings.Contains(text, filepath.Base(reste[0])) {
+		t.Fatalf("englisch: %d %q", code, text)
 	}
 }
 

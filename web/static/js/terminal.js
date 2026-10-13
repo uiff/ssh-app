@@ -255,7 +255,7 @@ class TerminalTab {
       const knoepfe = [];
       if (z === 'beendet' || z === 'fehler') {
         if (this.hostId) knoepfe.push(el('button', { class: 'btn klein primaer', type: 'button', onclick: () => App.neuVerbinden(this) }, icon('neu', 16), t('terminal.neuVerbinden')));
-        knoepfe.push(el('button', { class: 'btn klein', type: 'button', onclick: () => App.tabSchliessen(this) }, t('terminal.schliessen')));
+        knoepfe.push(el('button', { class: 'btn klein', type: 'button', onclick: () => App.tabSchliessen(this) }, t('basis.schliessen')));
       } else if (z === 'abgeloest') {
         knoepfe.push(el('button', { class: 'btn klein primaer', type: 'button', onclick: () => { this.versuche = 0; this.verbinden(); } }, t('terminal.hierherHolen')));
         knoepfe.push(el('button', { class: 'btn klein', type: 'button', title: t('terminal.hierSchliessenTitel'), onclick: () => App.tabEntfernen(this) }, t('terminal.hierSchliessen')));
@@ -299,24 +299,28 @@ class TerminalTab {
   }
 
   // Tastatureingabe (beachtet die Strg/Alt-Tasten der Telefon-Leiste und «An alle senden»).
+  // «An alle senden» zuerst: Die Rueckfrage fuer kritische Hosts liest die Zeile, bevor startMerken
+  // sie mit dem Zeilenende vergisst.
   tippen(d) {
     d = App.modifikator(d);
+    if (App.rundfunk && App.aktiv === this) App.rundfunkSenden(this, d);
     this.startMerken(d);
     this.sendenRoh(kodierer.encode(d));
-    if (App.rundfunk && App.aktiv === this) App.rundfunkSenden(this, d);
   }
 
   // Text einfuegen wie Strg+V: mit Bracketed Paste, falls das Programm es verlangt hat.
-  // opt.nurHier: nicht zusaetzlich an die anderen Tabs (Rundfunk); opt.ohneFokus: Fokus nicht holen.
+  // opt.nurHier: nicht zusaetzlich an die anderen Tabs (Rundfunk); opt.ohneFokus: Fokus nicht holen;
+  // opt.bestaetigt: Rueckfrage fuer kritische Hosts schon gestellt (App.befehlEinfuegen).
+  // Mit «An alle senden» gehen die anderen Tabs ueber App.rundfunkSenden (Rueckfrage, jeder Tab nach
+  // seinem eigenen Bracketed-Paste-Modus).
   einfuegen(text, opt) {
     if (!text) return;
     const o = opt || {};
+    if (!o.nurHier && App.rundfunk && App.aktiv === this) App.rundfunkSenden(this, '\x1b[200~' + text + '\x1b[201~', o.bestaetigt);
     this.startMerken(text);
     this.sendenRoh(kodierer.encode(this.geklammert(text)));
-    if (!o.nurHier && App.rundfunk && App.aktiv === this) {
-      for (const tt of App.tabs) if (tt !== this && tt.zustand === 'bereit') tt.sendenRoh(kodierer.encode(tt.geklammert(text)));
-    }
-    if (!o.ohneFokus) this.term.focus();
+    // Eine Rueckfrage (gefaehrliche Zeile an kritische Hosts) behaelt den Fokus.
+    if (!o.ohneFokus && !dialogStapel.length) this.term.focus();
   }
   geklammert(text) {
     return this.term.modes && this.term.modes.bracketedPasteMode ? '\x1b[200~' + text + '\x1b[201~' : text;
@@ -326,6 +330,8 @@ class TerminalTab {
   anpassen(melden) {
     if (!this.element.isConnected || this.element.offsetParent === null) return;
     try { this.fit.fit(); } catch (e) { return; }
+    // Groesse in der Statusleiste nachfuehren (Leiste auf/zu, Fenster, Schrift).
+    if (App.aktiv === this && App.groesseAnzeige) App.groesseAnzeige.textContent = this.term.cols + ' × ' + this.term.rows;
     const g = this.term.cols + 'x' + this.term.rows;
     if ((melden || g !== this.gemeldet) && this.ws && this.ws.readyState === 1) {
       this.senden({ t: 'groesse', c: this.term.cols, r: this.term.rows });

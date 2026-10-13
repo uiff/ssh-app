@@ -3,7 +3,7 @@ package texte
 // Texte des SSH-Verbindungsaufbaus (internal/sshx).
 func init() {
 	Eintragen(map[string]string{
-		"sshx.anmeldung.abgelehnt":              "Anmeldung abgelehnt — Benutzer, Passwort oder Schlüssel prüfen",
+		"sshx.anmeldung.abgelehnt":              "Anmeldung am Host abgelehnt — Benutzername, Passwort oder Schlüssel prüfen",
 		"sshx.schluessel.passphrase.fehlt":      "Der Schlüssel ist mit einer Passphrase geschützt — im Zugang hinterlegen",
 		"sshx.schluessel.passphrase.falsch":     "Die Passphrase passt nicht zum Schlüssel",
 		"sshx.schluessel.unlesbar":              "Das ist kein lesbarer privater Schlüssel (OpenSSH- oder PEM-Format erwartet)",
@@ -23,24 +23,24 @@ func init() {
 		"sshx.ssh.kein.ssh":                     "%s spricht kein SSH",
 		"sshx.ssh.fehlgeschlagen":               "SSH-Verbindung zu %s fehlgeschlagen",
 	}, map[string]string{
-		"sshx.anmeldung.abgelehnt":              "Sign-in rejected — check the user, password, or key",
+		"sshx.anmeldung.abgelehnt":              "Login rejected — check the username, password, or key",
 		"sshx.schluessel.passphrase.fehlt":      "The key is protected by a passphrase — add it to the credential",
-		"sshx.schluessel.passphrase.falsch":     "The passphrase does not match the key",
-		"sshx.schluessel.unlesbar":              "This is not a readable private key (OpenSSH or PEM format expected)",
+		"sshx.schluessel.passphrase.falsch":     "The passphrase doesn’t match the key",
+		"sshx.schluessel.unlesbar":              "This isn’t a readable private key (OpenSSH or PEM format expected)",
 		"sshx.schluessel.oeffentlich.ungueltig": "The public key is invalid",
 		"sshx.abgebrochen":                      "Connection canceled",
 		"sshx.kein.geheimnis":                   "No password or key stored",
 		"sshx.netz.keine.antwort":               "No response from %s (timed out after %d s)",
 		"sshx.netz.name.unbekannt":              "Unknown host name %s",
-		"sshx.netz.name.dns":                    "Cannot resolve %s (DNS server not responding)",
+		"sshx.netz.name.dns":                    "Can’t resolve %s (DNS server not responding)",
 		"sshx.netz.abgelehnt":                   "Connection refused — is an SSH server running on %s?",
 		"sshx.netz.kein.weg":                    "%s is unreachable (no route to host)",
 		"sshx.netz.zurueckgesetzt":              "The connection to %s was reset",
 		"sshx.netz.fehlgeschlagen":              "Connection to %s failed",
 		"sshx.ssh.keine.antwort":                "No response from %s — is an SSH server running there? (timed out after %d s)",
 		"sshx.ssh.beendet":                      "%s closed the connection — is an SSH server running there, and does it allow this address?",
-		"sshx.ssh.verfahren":                    "%s offers no common encryption algorithms (device too old?)",
-		"sshx.ssh.kein.ssh":                     "%s does not speak SSH",
+		"sshx.ssh.verfahren":                    "%s offers no supported encryption algorithms (device too old?)",
+		"sshx.ssh.kein.ssh":                     "%s doesn’t speak SSH",
 		"sshx.ssh.fehlgeschlagen":               "SSH connection to %s failed",
 	})
 }

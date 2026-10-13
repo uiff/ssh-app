@@ -76,6 +76,10 @@
 .host-form { display: flex; flex-direction: column; gap: 18px; }
 .host-form .meldung { overflow-wrap: anywhere; }
 .host-form input[aria-invalid=true] { border-color: var(--fehler); }
+.host-form .feld .hinweis.fehler { color: var(--fehler); }
+/* Rasterzellen nicht ueber ihren Inhalt aufweiten (320 px: langer Zugangs- oder Ordnername
+   schob sonst alle Felder rechts aus dem Bild). */
+.host-form .raster2 > *, .zugang-dialog .raster2 > * { min-width: 0; }
 
 /* Geraetetyp: Knopf mit gewaehltem Symbol, darunter das Raster */
 .gw-knopf { display: flex; align-items: center; gap: 14px; width: 100%; min-height: 64px; padding: 7px 14px 7px 7px; border: 1px solid var(--linie); border-radius: 12px; background: var(--grund); text-align: left; }
@@ -114,8 +118,10 @@
 .zugang-info { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 6px 6px 6px 8px; border: 1px solid var(--linie); border-radius: 8px; background: var(--grund); }
 .zugang-info .geraet-feld { width: 32px; height: 32px; }
 .zugang-info .haupt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.zugang-info .haupt b { font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.zugang-info .haupt small { font-size: 12.5px; color: var(--leise); }
+/* Langer Zugangsname: umbrechen (hoechstens zwei Zeilen) statt das Raster aufzuweiten. */
+.zugang-info .haupt b { font-weight: 500; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.zugang-info .haupt small { font-size: 12.5px; color: var(--leise); overflow-wrap: anywhere; }
+.zugang-info .btn { flex: none; }
 
 /* Erweitert */
 .erweitert-teil { border-top: 1px solid var(--linie); }
@@ -144,6 +150,16 @@
 /* ---------- Backup einspielen: Dateiwahl ---------- */
 .datei-wahl { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 12px; }
 .datei-name { min-width: 0; color: var(--text2); font-size: 14px; overflow-wrap: anywhere; }
+
+/* ---------- Einstellungen: Ueber (Keyway-Zeichen folgt der Akzentfarbe) ---------- */
+.ueber-marke { display: flex; align-items: center; gap: 14px; }
+.ueber-zeichen { flex: none; }
+.ueber-zeichen .grund { fill: var(--grund); stroke: var(--linie); }
+.ueber-zeichen .loch { fill: var(--akzent); }
+.ueber-zeichen .prompt { fill: none; stroke: var(--grund); stroke-width: 3.2; stroke-linecap: round; stroke-linejoin: round; }
+.ueber-name { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.ueber-name b { font-size: 17px; font-weight: 600; letter-spacing: .01em; }
+.ueber-name span { font-size: 13.5px; color: var(--text2); }
 
 /* ---------- Einstellungen: Akzentfarbe ---------- */
 .akzente { display: flex; flex-wrap: wrap; gap: 8px; }

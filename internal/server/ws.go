@@ -521,7 +521,11 @@ func (s *Server) sitzungen(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) sitzungBeenden(w http.ResponseWriter, r *http.Request) {
-	s.tm.Entfernen(r.PathValue("id"))
+	id := r.PathValue("id")
+	// Setzt der Host gerade eine hochgeladene Datei ein, erst das abwarten: Endet die
+	// SFTP-Verbindung mittendrin, bliebe die Datei unvollstaendig (EinsetzenAbwarten).
+	s.EinsetzenAbwarten(id, time.Minute)
+	s.tm.Entfernen(id)
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

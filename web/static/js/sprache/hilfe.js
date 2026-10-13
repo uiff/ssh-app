@@ -21,10 +21,13 @@ i18nErgaenzen({
     'hilfe.nehmen': 'Nehmen',
 
     // --- Quellenangabe tldr-pages (CC BY 4.0); {tldr} und {lizenz} werden Links ---
-    'hilfe.quelle': 'Aus {tldr} (© tldr-pages team and contributors, {lizenz}), angepasst dargestellt',
+    'hilfe.quelle': 'Aus {tldr} (© tldr-pages-Team und Mitwirkende, {lizenz}), angepasst dargestellt',
     'hilfe.quelle.sprache': 'Seite auf {sprache}',
     'hilfe.sprache.de': 'Deutsch',
     'hilfe.sprache.en': 'Englisch',
+    // Kuerzel am Suchtreffer aus der anderen Sprache
+    'hilfe.sprache.kurz.de': 'DE',
+    'hilfe.sprache.kurz.en': 'EN',
 
     // --- Palette ---
     'hilfe.palette.titel': 'Suchen',
@@ -60,7 +63,7 @@ i18nErgaenzen({
     'hilfe.leer.text': 'Type a command in the terminal. Examples and what its options mean show up here.',
     'hilfe.leer.suchen': 'Search in plain words',
     'hilfe.leer.anzahl': '{anzahl} commands available offline.',
-    'hilfe.leer.fehlt': 'Command help is not installed (tldr archives missing)',
+    'hilfe.leer.fehlt': 'Command help isn’t installed (tldr archives missing)',
     'hilfe.keineSeite': 'There is no help page for this command.',
     'hilfe.suchen': 'Search',
     'hilfe.erklaert': 'Your command explained',
@@ -74,14 +77,17 @@ i18nErgaenzen({
     'hilfe.quelle.sprache': 'Page in {sprache}',
     'hilfe.sprache.de': 'German',
     'hilfe.sprache.en': 'English',
+    // Badge on a search result from the other language
+    'hilfe.sprache.kurz.de': 'DE',
+    'hilfe.sprache.kurz.en': 'EN',
 
     // --- Palette ---
     'hilfe.palette.titel': 'Search',
     'hilfe.palette.feld': 'Search…',
-    'hilfe.palette.feldLabel': 'Search commands, hosts and snippets',
+    'hilfe.palette.feldLabel': 'Search commands, hosts, and snippets',
     'hilfe.palette.schliessen': 'Close',
     'hilfe.palette.nichts': 'No results.',
-    'hilfe.palette.leer': 'Commands, hosts and snippets — plain words work too, e.g. “extract archive”.',
+    'hilfe.palette.leer': 'Commands, hosts, and snippets — plain words work too, e.g. “extract archive”.',
     'hilfe.fuss.waehlen': 'select',
     'hilfe.fuss.platzhalter': 'placeholders',
     'hilfe.fuss.einfuegen': 'insert',

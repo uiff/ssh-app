@@ -407,10 +407,11 @@ type sicherungsDatei struct {
 	Daten    []byte    `json:"daten"`
 }
 
+// Formatkennung bleibt «ssh-app-backup» (aeltere Backups sollen sich weiter einspielen lassen).
 const dateiFormat = "ssh-app-backup"
 
 func (s *Server) sicherungLaden(w http.ResponseWriter, r *http.Request) {
-	sg, err := s.st.Exportieren(s.tr.KopfJSON(), "ssh-app "+s.opt.Version)
+	sg, err := s.st.Exportieren(s.tr.KopfJSON(), "Keyway "+s.opt.Version)
 	if err != nil {
 		speicherFehler(w, r, err)
 		return
@@ -423,7 +424,7 @@ func (s *Server) sicherungLaden(w http.ResponseWriter, r *http.Request) {
 	}
 	d := sicherungsDatei{Format: dateiFormat, Version: 1, Erstellt: sg.Erstellt,
 		Hinweis: texte.T(texte.AusAnfrage(r), "server.sicherung.hinweis"), Daten: geheim}
-	name := "ssh-app-backup-" + time.Now().Format("2006-01-02-1504") + ".json"
+	name := "keyway-backup-" + time.Now().Format("2006-01-02-1504") + ".json"
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	json.NewEncoder(w).Encode(d)

@@ -2,8 +2,10 @@ package server
 
 import (
 	"crypto/rand"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"mime"
@@ -13,10 +15,12 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/pkg/sftp"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/uiff/ssh-app/internal/term"
 	"github.com/uiff/ssh-app/internal/texte"
@@ -65,7 +69,7 @@ var errDateiVorhanden = errors.New("gibt es schon")
 
 // errUebertragungAbgebrochen ersetzt io.ErrUnexpectedEOF des Browsers, damit pkg/sftp
 // (das ErrUnexpectedEOF als regulaeres Ende wertet) den Abbruch nicht verschluckt.
-var errUebertragungAbgebrochen = errors.New("Übertragung vom Browser abgebrochen")
+var errUebertragungAbgebrochen = errors.New("übertragung vom Browser abgebrochen")
 
 func (s *Server) sftpFuer(w http.ResponseWriter, r *http.Request) (*term.Sitzung, *sftp.Client, bool) {
 	sz, ok := s.tm.Hole(r.PathValue("id"))
@@ -77,7 +81,7 @@ func (s *Server) sftpFuer(w http.ResponseWriter, r *http.Request) (*term.Sitzung
 	if err != nil {
 		var m *texte.Meldung
 		switch {
-		case errors.As(err, &m): // z.B. term.ErrKeinSFTP
+		case errors.As(err, &m): // z. B. term.ErrKeinSFTP
 			fehlerAus(w, r, http.StatusBadGateway, err)
 		default:
 			log.Printf("SFTP: %v", err)
@@ -96,7 +100,7 @@ func sauberPfad(p string) (string, error) {
 }
 
 // sftpText uebersetzt einen SFTP-Fehler in einen verstaendlichen Satz in der Sprache der
-// Anfrage. Der rohe Text (z.B. «sftp: "Failure" (SSH_FX_FAILURE)») geht nur ins Server-Log.
+// Anfrage. Der rohe Text (z. B. «sftp: "Failure" (SSH_FX_FAILURE)») geht nur ins Server-Log.
 func sftpText(sprache string, err error) (int, string) {
 	var f *dateiFehler
 	var m *texte.Meldung
@@ -309,9 +313,13 @@ func (s *Server) dateiLaden(w http.ResponseWriter, r *http.Request) {
 // uebersprungen und gesammelt gemeldet: 409 mit «vorhanden» (ersetzbar nach Rueckfrage),
 // «gesperrt» (Ordner oder Spezialdatei, nicht ersetzbar) und «hochgeladen» (was geklappt hat).
 func (s *Server) dateiHochladen(w http.ResponseWriter, r *http.Request) {
-	_, c, ok := s.sftpFuer(w, r)
+	sz, c, ok := s.sftpFuer(w, r)
 	if !ok {
 		return
+	}
+	hilfe := ersetzHilfe{anmelden: func() func() { return s.einsetzenAnmelden(sz.ID()) }}
+	if _, kopie := c.HasExtension(kopieDaten); kopie && sz.Client() != nil {
+		hilfe.kanal = func() (io.ReadWriteCloser, error) { return sftpKanalOeffnen(sz.Client()) }
 	}
 	sprache := texte.AusAnfrage(r)
 	q := r.URL.Query()
@@ -349,7 +357,7 @@ func (s *Server) dateiHochladen(w http.ResponseWriter, r *http.Request) {
 			teil.Close()
 			continue
 		}
-		err = hochladenEine(c, ziel, name, ersetzen[name], teil)
+		err = hochladenEine(c, ziel, name, ersetzen[name], teil, hilfe)
 		teil.Close()
 		var df *dateiFehler
 		switch {
@@ -462,11 +470,20 @@ func nebenName(p, art string) string {
 	return path.Join(path.Dir(p), "."+kuerzen(path.Base(p), 180)+"."+zufallsEndung()+".sshapp-"+art)
 }
 
-// entfernen raeumt eine Hilfsdatei weg; scheitert das, steht es im Log.
-func entfernen(c *sftp.Client, p string) {
+// entfernen raeumt eine Hilfsdatei weg; scheitert das, steht es im Log (false: sie liegt noch da).
+func entfernen(c *sftp.Client, p string) bool {
 	if err := c.Remove(p); err != nil && !errors.Is(err, os.ErrNotExist) {
 		log.Printf("Hilfsdatei %s bleibt liegen: %v", p, err)
+		return false
 	}
+	return true
+}
+
+// beantwortet: Der Host hat die Anfrage beantwortet (und abgelehnt). Bei anderen Fehlern
+// (Verbindung weg) ist offen, ob er sie noch ausgefuehrt hat.
+func beantwortet(err error) bool {
+	var se *sftp.StatusError
+	return errors.As(err, &se) || errors.Is(err, os.ErrPermission) || errors.Is(err, os.ErrNotExist)
 }
 
 // uebertragen schreibt den Browser-Strom in f und schliesst f.
@@ -485,10 +502,22 @@ func uebertragen(f *sftp.File, quelle io.Reader, ziel string) error {
 	return err
 }
 
+// ersetzHilfe: was hochladenEine zum Ersetzen ausser dem SFTP-Client braucht (aus der
+// Sitzung; in Tests von Hand).
+type ersetzHilfe struct {
+	// kanal oeffnet einen eigenen SFTP-Kanal zum Host fuer hostKopieren (nil: der Host
+	// kann nicht selbst kopieren).
+	kanal func() (io.ReadWriteCloser, error)
+	// anmelden meldet die Phase an, in der die vorhandene Datei schon ueberschrieben und danach
+	// die Zwischendatei entfernt wird; die zurueckgegebene Funktion meldet sie wieder ab (siehe
+	// EinsetzenAbwarten).
+	anmelden func() (fertig func())
+}
+
 // hochladenEine schreibt eine Datei nach ordner/name. Eine neue Datei entsteht erst als
 // «.name.<zufall>.sshapp-upload» und bekommt nach vollstaendiger Uebertragung ihren Namen.
 // Ersetzen (nur mit Erlaubnis) siehe ersetzenMit.
-func hochladenEine(c *sftp.Client, ordner, name string, ersetzen bool, quelle io.Reader) error {
+func hochladenEine(c *sftp.Client, ordner, name string, ersetzen bool, quelle io.Reader, hilfe ersetzHilfe) error {
 	dateiPfad := path.Join(ordner, name)
 	fi, err := c.Lstat(dateiPfad)
 	if errors.Is(err, os.ErrNotExist) {
@@ -515,7 +544,7 @@ func hochladenEine(c *sftp.Client, ordner, name string, ersetzen bool, quelle io
 	case zfi == nil:
 		return neuAnlegen(c, ziel, quelle) // Verknuepfung ohne Ziel: Ziel anlegen (wie cp)
 	}
-	return ersetzenMit(c, ziel, zfi, name, quelle)
+	return ersetzenMit(c, ziel, zfi, name, quelle, hilfe)
 }
 
 // neuAnlegen: temporaere Datei schreiben, dann umbenennen. SSH_FXP_RENAME ersetzt bei
@@ -546,17 +575,19 @@ func neuAnlegen(c *sftp.Client, ziel string, quelle io.Reader) error {
 //
 // Die Datei selbst bleibt erhalten: Besitzer, Gruppe, Rechte, ACLs, harte Verknuepfungen
 // und per Docker eingebundene Einzeldateien sehen den neuen Inhalt. Dazu kommt der Strom
-// erst vollstaendig in eine temporaere Datei (ein Abbruch laesst das Original stehen) und
-// wird danach auf dem Host in die Datei kopiert.
+// des Browsers erst vollstaendig in eine temporaere Datei neben ziel (ein Abbruch bis
+// dahin laesst das Original stehen). Danach wird sie in die Datei eingesetzt
+// (fassungEinsetzen): vom Host selbst, wenn sein SFTP-Dienst «copy-data» kennt (OpenSSH
+// ab 9.0), sonst liest die App sie zurueck und schreibt sie in die Datei.
 //
 //   - Darf der Benutzer die Datei nicht schreiben: abgelehnt (wie frueher «permission denied»),
 //     bevor etwas uebertragen wird.
-//   - Laesst sie sich nicht zum Schreiben oeffnen, ohne dass Rechte fehlen (z.B. «Text file
+//   - Laesst sie sich nicht zum Schreiben oeffnen, ohne dass Rechte fehlen (z. B. «Text file
 //     busy» bei einem laufenden Programm): temporaere Datei mit Rechten und Besitzer der
 //     Vorlage, dann ersetzend umbenennen.
 //   - Fehlt im Ordner das Schreibrecht fuer die temporaere Datei: wie frueher direkt in die
 //     Datei schreiben (ein Abbruch hinterlaesst sie dann unvollstaendig).
-func ersetzenMit(c *sftp.Client, ziel string, vorlage os.FileInfo, name string, quelle io.Reader) error {
+func ersetzenMit(c *sftp.Client, ziel string, vorlage os.FileInfo, name string, quelle io.Reader, hilfe ersetzHilfe) error {
 	// Oeffnen ohne O_TRUNC aendert nichts an der Datei.
 	vorOrt := true
 	probe, err := c.OpenFile(ziel, os.O_WRONLY)
@@ -585,14 +616,28 @@ func ersetzenMit(c *sftp.Client, ziel string, vorlage os.FileInfo, name string, 
 		return err
 	}
 	if vorOrt {
-		angefangen, err := inhaltEinsetzen(c, tmp, ziel)
-		if err != nil && angefangen {
+		// Die Phase bleibt angemeldet, bis auch tmp wieder weg ist: Sonst schlossen «Sitzung
+		// beenden» und das Herunterfahren die Verbindung mitten im Aufraeumen, und eine
+		// versteckte Vollkopie bliebe liegen (siehe EinsetzenAbwarten).
+		if hilfe.anmelden != nil {
+			defer hilfe.anmelden()()
+		}
+		angefangen, err := fassungEinsetzen(c, tmp, ziel, hilfe)
+		switch {
+		case err == nil:
+			entfernen(c, tmp)
+			return nil
+		case angefangen:
 			// Das Original ist angeschrieben: die vollstaendige Fassung nicht wegwerfen.
 			log.Printf("Hochladen: %s unvollstaendig, vollstaendig in %s: %v", ziel, tmp, err)
 			code, _ := sftpText(texte.DE, err)
 			return meldung(code, "dateien.hochladen.einsetzenFehler", name, path.Base(tmp)).mit(err)
+		case !entfernen(c, tmp):
+			// Abbruch (meist: Verbindung weg), bevor das Original beruehrt war: Es ist unveraendert,
+			// und die vollstaendige Fassung bleibt liegen (sie liess sich nicht mehr entfernen).
+			code, _ := sftpText(texte.DE, err)
+			return meldung(code, "dateien.hochladen.einsetzenNichtBegonnen", name, path.Base(tmp)).mit(err)
 		}
-		entfernen(c, tmp)
 		return err
 	}
 	besitzUebernehmen(c, tmp, vorlage)
@@ -603,8 +648,51 @@ func ersetzenMit(c *sftp.Client, ziel string, vorlage os.FileInfo, name string, 
 	return nil
 }
 
-// inhaltEinsetzen kopiert von in die vorhandene Datei nach (auf dem Host, die Datei behaelt
-// Inode, Besitzer und Rechte). angefangen meldet, ob nach schon gekuerzt wurde.
+// fassungEinsetzen bringt die vollstaendig hochgeladene Fassung tmp in die vorhandene Datei
+// ziel. angefangen meldet, ob ziel dabei schon angeschrieben sein kann.
+//
+// Kann der Host selbst kopieren (hostKopieren), gehen die Daten nicht noch einmal ueber die
+// SSH-Verbindung. Sonst (aeltere Hosts, andere SFTP-Dienste) liest die App tmp zurueck und
+// schreibt es in ziel: Die Daten gehen dann zweimal mehr ueber die SSH-Verbindung (zuerst
+// in tmp, dann gelesen, dann geschrieben). Das ist der Preis dafuer, dass die Datei selbst
+// erhalten bleibt; SFTP v3 kennt sonst keine Kopie auf dem Host. Der Browser zeigt diese
+// Phase als «Ersetze …».
+//
+// Waehrend des Einsetzens ist die Phase angemeldet (ersetzenMit, bis tmp aufgeraeumt ist):
+// Endet die Sitzung mittendrin, bliebe ziel unvollstaendig (die vollstaendige Fassung laege
+// noch in tmp). «Sitzung beenden» und das Herunterfahren warten darum mit EinsetzenAbwarten.
+func fassungEinsetzen(c *sftp.Client, tmp, ziel string, hilfe ersetzHilfe) (angefangen bool, err error) {
+	if hilfe.kanal != nil {
+		beruehrt, err := aufDemHostEinsetzen(c, tmp, ziel, hilfe.kanal)
+		if err == nil {
+			return true, nil
+		}
+		if !errors.Is(err, errKeineHostKopie) {
+			log.Printf("Hochladen: Kopie auf dem Host nach %s gescheitert, kopiere über die App: %v", ziel, err)
+		}
+		angefangen = beruehrt
+	}
+	a, err := inhaltEinsetzen(c, tmp, ziel)
+	return angefangen || a, err
+}
+
+// aufDemHostEinsetzen oeffnet einen eigenen SFTP-Kanal und laesst den Host tmp nach ziel kopieren.
+func aufDemHostEinsetzen(c *sftp.Client, tmp, ziel string, kanal func() (io.ReadWriteCloser, error)) (beruehrt bool, err error) {
+	fi, err := c.Lstat(tmp)
+	if err != nil {
+		return false, err
+	}
+	k, err := kanal()
+	if err != nil {
+		return false, err
+	}
+	defer k.Close()
+	return hostKopieren(k, tmp, ziel, fi.Size())
+}
+
+// inhaltEinsetzen kopiert von in die vorhandene Datei nach, ueber die App: Die Daten werden
+// gelesen und wieder geschrieben (die Datei behaelt Inode, Besitzer und Rechte). angefangen
+// meldet, ob nach schon gekuerzt sein kann.
 func inhaltEinsetzen(c *sftp.Client, von, nach string) (angefangen bool, err error) {
 	src, err := c.Open(von)
 	if err != nil {
@@ -613,7 +701,8 @@ func inhaltEinsetzen(c *sftp.Client, von, nach string) (angefangen bool, err err
 	defer src.Close()
 	dst, err := c.OpenFile(nach, os.O_WRONLY|os.O_TRUNC)
 	if err != nil {
-		return false, err
+		// Ohne Antwort des Hosts ist offen, ob er schon gekuerzt hat.
+		return !beantwortet(err), err
 	}
 	_, err = io.Copy(dst, src) // src.WriteTo: liest mit mehreren Anfragen gleichzeitig
 	if cerr := dst.Close(); err == nil {
@@ -788,4 +877,335 @@ func (s *Server) dateiAktion(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// ---------- Kopie auf dem Host (SFTP-Erweiterung «copy-data») ----------
+
+// SFTP-Pakete und -Codes (draft-ietf-secsh-filexfer-02), soweit hostKopieren sie braucht.
+const (
+	fxpInit     = 1
+	fxpVersion  = 2
+	fxpOpen     = 3
+	fxpClose    = 4
+	fxpFsetstat = 10
+	fxpStatus   = 101
+	fxpHandle   = 102
+	fxpExtended = 200
+
+	fxfRead  = 0x01
+	fxfWrite = 0x02
+
+	fxOK               = 0
+	fxNoSuchFile       = 2
+	fxPermissionDenied = 3
+	fxOpUnsupported    = 8
+
+	attrGroesse = 0x01 // SSH_FILEXFER_ATTR_SIZE
+
+	// sftpPaketMax begrenzt eine Antwort des Hosts (OpenSSH schickt hoechstens 256 KiB).
+	sftpPaketMax = 1 << 20
+)
+
+// kopieDaten: Erweiterung des OpenSSH-SFTP-Dienstes (ab 9.0, draft-ietf-secsh-filexfer-extensions):
+// Der Host kopiert zwischen zwei offenen Dateien, ohne dass die Daten ueber die Verbindung gehen.
+const kopieDaten = "copy-data"
+
+// errKeineHostKopie: Der SFTP-Dienst des Hosts kann nicht selbst kopieren.
+var errKeineHostKopie = errors.New("SFTP-Dienst ohne copy-data")
+
+// errSFTPAntwort: Die Antwort des Hosts passt nicht zur Anfrage.
+var errSFTPAntwort = errors.New("unerwartete SFTP-Antwort")
+
+// sftpStatus ist eine Fehlerantwort (SSH_FXP_STATUS) auf eine Anfrage von sftpRoh.
+type sftpStatus struct {
+	code uint32
+	text string
+}
+
+func (e *sftpStatus) Error() string { return fmt.Sprintf("SFTP-Status %d: %s", e.code, e.text) }
+
+// Is ordnet die Codes wie pkg/sftp ein (fuer sftpText und errors.Is).
+func (e *sftpStatus) Is(ziel error) bool {
+	switch e.code {
+	case fxNoSuchFile:
+		return ziel == os.ErrNotExist
+	case fxPermissionDenied:
+		return ziel == os.ErrPermission
+	}
+	return false
+}
+
+func paketLesen(r io.Reader) ([]byte, error) {
+	var l [4]byte
+	if _, err := io.ReadFull(r, l[:]); err != nil {
+		return nil, err
+	}
+	n := binary.BigEndian.Uint32(l[:])
+	if n > sftpPaketMax {
+		return nil, errSFTPAntwort
+	}
+	b := make([]byte, n)
+	_, err := io.ReadFull(r, b)
+	return b, err
+}
+
+func paketSchreiben(w io.Writer, b []byte) error {
+	_, err := w.Write(append(binary.BigEndian.AppendUint32(nil, uint32(len(b))), b...))
+	return err
+}
+
+// zeichenkette liest eine SFTP-Zeichenkette; rest ist nil, wenn sie nicht vollstaendig ist.
+func zeichenkette(b []byte) (string, []byte) {
+	if len(b) < 4 || uint32(len(b)-4) < binary.BigEndian.Uint32(b) {
+		return "", nil
+	}
+	n := binary.BigEndian.Uint32(b)
+	return string(b[4 : 4+n]), b[4+n:]
+}
+
+// hatErweiterung sucht name in den Erweiterungen eines VERSION-Pakets (nach der Versionsnummer).
+func hatErweiterung(b []byte, name string) bool {
+	for len(b) > 0 {
+		n, rest := zeichenkette(b)
+		if rest == nil {
+			return false
+		}
+		if _, rest = zeichenkette(rest); rest == nil {
+			return false
+		}
+		if n == name {
+			return true
+		}
+		b = rest
+	}
+	return false
+}
+
+// sftpFelder baut den Inhalt einer Anfrage (nach Typ und ID).
+type sftpFelder []byte
+
+func (f sftpFelder) text(s string) sftpFelder {
+	return append(binary.BigEndian.AppendUint32(f, uint32(len(s))), s...)
+}
+func (f sftpFelder) u32(v uint32) sftpFelder { return binary.BigEndian.AppendUint32(f, v) }
+func (f sftpFelder) u64(v uint64) sftpFelder { return binary.BigEndian.AppendUint64(f, v) }
+
+// sftpRoh spricht SFTP v3 direkt auf einem eigenen Kanal, Anfrage um Anfrage:
+// pkg/sftp kennt «copy-data» nicht.
+type sftpRoh struct {
+	rw io.ReadWriter
+	id uint32
+}
+
+// anfrage schickt typ mit neuer ID und liefert Typ und Inhalt der Antwort (nach der ID).
+// Eine STATUS-Antwort kommt als Fehler zurueck (nil bei SSH_FX_OK).
+func (s *sftpRoh) anfrage(typ byte, felder sftpFelder) (byte, []byte, error) {
+	s.id++
+	if err := paketSchreiben(s.rw, append(binary.BigEndian.AppendUint32([]byte{typ}, s.id), felder...)); err != nil {
+		return 0, nil, err
+	}
+	a, err := paketLesen(s.rw)
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(a) < 5 || binary.BigEndian.Uint32(a[1:5]) != s.id {
+		return 0, nil, errSFTPAntwort
+	}
+	if a[0] != fxpStatus {
+		return a[0], a[5:], nil
+	}
+	if len(a) < 9 {
+		return 0, nil, errSFTPAntwort
+	}
+	if code := binary.BigEndian.Uint32(a[5:9]); code != fxOK {
+		text, _ := zeichenkette(a[9:])
+		return fxpStatus, nil, &sftpStatus{code: code, text: text}
+	}
+	return fxpStatus, nil, nil
+}
+
+// status schickt eine Anfrage, auf die nur ein STATUS zurueckkommt.
+func (s *sftpRoh) status(typ byte, felder sftpFelder) error {
+	t, _, err := s.anfrage(typ, felder)
+	if err == nil && t != fxpStatus {
+		return errSFTPAntwort
+	}
+	return err
+}
+
+// oeffnen liefert einen Handle fuer pfad (pflags: SSH_FXF_*, ohne Attribute).
+func (s *sftpRoh) oeffnen(pfad string, pflags uint32) (string, error) {
+	t, rest, err := s.anfrage(fxpOpen, sftpFelder(nil).text(pfad).u32(pflags).u32(0))
+	if err != nil {
+		return "", err
+	}
+	h, rest := zeichenkette(rest)
+	if t != fxpHandle || rest == nil || h == "" {
+		return "", errSFTPAntwort
+	}
+	return h, nil
+}
+
+// hostKopieren laesst den Host von in die vorhandene Datei nach kopieren (rw: ein eigener,
+// frischer SFTP-Kanal). Die Daten gehen dabei nicht ueber die Verbindung.
+//
+// nach wird ab dem Anfang ueberschrieben und erst danach auf laenge gekuerzt, nicht vorher:
+// Bricht die Verbindung vor der Kopie ab, bleibt das Original unberuehrt. Die Kopie selbst
+// ist eine einzige Anfrage; der sftp-server von OpenSSH arbeitet sie auch dann zu Ende ab,
+// wenn die Verbindung waehrenddessen abreisst (er merkt das erst beim Antworten). Nur wenn
+// die neue Fassung kuerzer ist, steht zwischen Kopie und Kuerzen (eine Antwortzeit lang)
+// noch das Ende des Originals dahinter.
+//
+// beruehrt meldet, ob nach schon angeschrieben sein kann. errKeineHostKopie: Der Dienst
+// kennt «copy-data» nicht (nach ist unberuehrt).
+func hostKopieren(rw io.ReadWriter, von, nach string, laenge int64) (beruehrt bool, err error) {
+	if err := paketSchreiben(rw, binary.BigEndian.AppendUint32([]byte{fxpInit}, 3)); err != nil {
+		return false, err
+	}
+	v, err := paketLesen(rw)
+	if err != nil {
+		return false, err
+	}
+	if len(v) < 5 || v[0] != fxpVersion || !hatErweiterung(v[5:], kopieDaten) {
+		return false, errKeineHostKopie
+	}
+	s := &sftpRoh{rw: rw}
+	lesen, err := s.oeffnen(von, fxfRead)
+	if err != nil {
+		return false, err
+	}
+	defer s.status(fxpClose, sftpFelder(nil).text(lesen))
+	schreiben, err := s.oeffnen(nach, fxfWrite)
+	if err != nil {
+		return false, err
+	}
+	// Lesen ab 0 bis zum Ende (Laenge 0), schreiben ab 0.
+	err = s.status(fxpExtended, sftpFelder(nil).text(kopieDaten).text(lesen).u64(0).u64(0).text(schreiben).u64(0))
+	var st *sftpStatus
+	beruehrt = !(errors.As(err, &st) && st.code == fxOpUnsupported)
+	if err == nil {
+		err = s.status(fxpFsetstat, sftpFelder(nil).text(schreiben).u32(attrGroesse).u64(uint64(laenge)))
+	}
+	if cerr := s.status(fxpClose, sftpFelder(nil).text(schreiben)); err == nil {
+		err = cerr
+	}
+	if !beruehrt {
+		err = errKeineHostKopie
+	}
+	return beruehrt, err
+}
+
+// sftpKanal ist ein weiterer SFTP-Kanal auf der Verbindung einer Sitzung (fuer hostKopieren).
+type sftpKanal struct {
+	io.Reader
+	io.Writer
+	sess *ssh.Session
+}
+
+func (k *sftpKanal) Close() error { return k.sess.Close() }
+
+func sftpKanalOeffnen(client *ssh.Client) (io.ReadWriteCloser, error) {
+	sess, err := client.NewSession()
+	if err != nil {
+		return nil, err
+	}
+	w, err := sess.StdinPipe()
+	if err != nil {
+		sess.Close()
+		return nil, err
+	}
+	r, err := sess.StdoutPipe()
+	if err != nil {
+		sess.Close()
+		return nil, err
+	}
+	if err := sess.RequestSubsystem("sftp"); err != nil {
+		sess.Close()
+		return nil, err
+	}
+	return &sftpKanal{Reader: r, Writer: w, sess: sess}, nil
+}
+
+// ---------- Einsetzen abwarten ----------
+
+type einsetzSchluessel struct {
+	s  *Server
+	id string
+}
+
+// einsetzLaeufe zaehlt je Sitzung, wie viele hochgeladene Dateien gerade in vorhandene
+// eingesetzt werden (fassungEinsetzen, samt Aufraeumen der Zwischendatei in ersetzenMit).
+// geaendert wird bei jedem Ende geschlossen und erneuert.
+var einsetzLaeufe = struct {
+	sync.Mutex
+	n         map[einsetzSchluessel]int
+	geaendert chan struct{}
+}{n: map[einsetzSchluessel]int{}, geaendert: make(chan struct{})}
+
+// einsetzenAnmelden meldet ein Einsetzen in der Sitzung id an; fertig meldet es ab.
+func (s *Server) einsetzenAnmelden(id string) (fertig func()) {
+	k := einsetzSchluessel{s, id}
+	einsetzLaeufe.Lock()
+	einsetzLaeufe.n[k]++
+	einsetzLaeufe.Unlock()
+	var einmal sync.Once
+	return func() {
+		einmal.Do(func() {
+			einsetzLaeufe.Lock()
+			if einsetzLaeufe.n[k]--; einsetzLaeufe.n[k] <= 0 {
+				delete(einsetzLaeufe.n, k)
+			}
+			close(einsetzLaeufe.geaendert)
+			einsetzLaeufe.geaendert = make(chan struct{})
+			einsetzLaeufe.Unlock()
+		})
+	}
+}
+
+// einsetzenLaufend: Anzahl laufender Einsetzungen in der Sitzung id (leer: in allen Sitzungen).
+func (s *Server) einsetzenLaufend(id string) int {
+	einsetzLaeufe.Lock()
+	defer einsetzLaeufe.Unlock()
+	return s.einsetzenZaehlen(id)
+}
+
+func (s *Server) einsetzenZaehlen(id string) int {
+	n := 0
+	for k, v := range einsetzLaeufe.n {
+		if k.s == s && (id == "" || k.id == id) {
+			n += v
+		}
+	}
+	return n
+}
+
+// EinsetzenAbwarten wartet hoechstens frist, bis in der Sitzung id (leer: in keiner Sitzung
+// dieses Servers) mehr eine hochgeladene Datei in eine vorhandene eingesetzt und ihre
+// Zwischendatei aufgeraeumt wird. Endet die SFTP-Verbindung mitten im Einsetzen, bleibt die
+// Datei unvollstaendig (beim Aufraeumen: eine versteckte Vollkopie liegen): Darum vor dem Beenden
+// einer Sitzung und vor dem Schliessen aller Sitzungen beim Herunterfahren aufrufen.
+// false: Die Frist ist abgelaufen.
+func (s *Server) EinsetzenAbwarten(id string, frist time.Duration) bool {
+	ende := time.NewTimer(frist)
+	defer ende.Stop()
+	gemeldet := false
+	for {
+		einsetzLaeufe.Lock()
+		n := s.einsetzenZaehlen(id)
+		warte := einsetzLaeufe.geaendert
+		einsetzLaeufe.Unlock()
+		if n == 0 {
+			return true
+		}
+		if !gemeldet {
+			log.Printf("Warte auf %d hochgeladene Datei(en), die gerade eingesetzt werden", n)
+			gemeldet = true
+		}
+		select {
+		case <-warte:
+		case <-ende.C:
+			log.Printf("Einsetzen nach %v nicht fertig — Sitzung wird trotzdem beendet", frist)
+			return false
+		}
+	}
 }
