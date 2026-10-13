@@ -1,0 +1,68 @@
+# Legt das GitHub-Release einer Version an, Text aus docs/releases/<tag>.md:
+#   - nach einem erfolgreichen Container-Lauf fuer einen Versions-Tag (die Images sind dann veroeffentlicht)
+#   - bei Aenderungen an docs/releases/ auf main: fehlendes Release nachholen, Text nachfuehren
+# Ablauf fuer eine neue Version: docs/releases/vX.Y.Z.md schreiben und auf main bringen, dann den Tag pushen.
+name: Release
+
+on:
+  workflow_run:
+    workflows: [Container]
+    types: [completed]
+  push:
+    branches: [main]
+    paths: ["docs/releases/**"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: >-
+      github.event_name == 'push' ||
+      (github.event.workflow_run.conclusion == 'success' && startsWith(github.event.workflow_run.head_branch, 'v'))
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # mit Tags
+
+      - name: Releases anlegen oder nachfuehren
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG_AUS_LAUF: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          set -euo pipefail
+          if [ -n "$TAG_AUS_LAUF" ]; then
+            tags="$TAG_AUS_LAUF"
+          else
+            tags=$(find docs/releases -maxdepth 1 -name 'v*.md' -printf '%f\n' | sed 's/\.md$//' | sort -V)
+          fi
+          for tag in $tags; do
+            if [[ ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+              echo "::warning::$tag ist kein Versions-Tag"
+              continue
+            fi
+            notizen="docs/releases/$tag.md"
+            if [ ! -f "$notizen" ]; then
+              echo "::warning title=Release $tag::$notizen fehlt, darum kein Release"
+              continue
+            fi
+            if ! git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+              echo "$tag: Tag gibt es noch nicht, Release folgt nach dem Bau"
+              continue
+            fi
+            if gh release view "$tag" >/dev/null 2>&1; then
+              gh release edit "$tag" --notes-file "$notizen"
+              echo "$tag: Text nachgefuehrt"
+            else
+              gh release create "$tag" --verify-tag --title "Keyway ${tag#v}" --notes-file "$notizen"
+              echo "$tag: Release angelegt"
+            fi
+          done

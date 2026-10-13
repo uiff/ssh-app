@@ -660,11 +660,14 @@ Backup-Format) tragen weiterhin den alten Namen `ssh-app`, damit bestehende Inst
 
 Ein Versions-Tag baut und veröffentlicht die Images (`.github/workflows/container.yml`): Tests, ein Probestart des
 Images, dann der Bau für `linux/amd64` und `linux/arm64` und das Hochladen nach ghcr.io und Docker Hub. Die Beschreibung
-auf Docker Hub kommt aus [`DOCKERHUB.md`](DOCKERHUB.md).
+auf Docker Hub kommt aus [`DOCKERHUB.md`](DOCKERHUB.md). Sind die Images veröffentlicht, legt
+`.github/workflows/release.yml` das GitHub-Release mit dem Text aus `docs/releases/<tag>.md` an. Diese Datei also zuerst
+schreiben und auf `main` bringen:
 
 ```bash
-git tag v0.3.1
-git push origin v0.3.1
+git add docs/releases/v0.4.1.md && git commit -m "Release-Notizen 0.4.1" && git push
+git tag v0.4.1
+git push origin v0.4.1
 ```
 
 Für Docker Hub braucht es zwei Repository-Secrets (Settings › Secrets and variables › Actions): `DOCKERHUB_USERNAME` und

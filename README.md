@@ -643,11 +643,13 @@ Translations: each text exists in German and English.
 
 A version tag builds and publishes the images (`.github/workflows/container.yml`): tests, a trial start of the image,
 then the build for `linux/amd64` and `linux/arm64` and the push to ghcr.io and Docker Hub. The Docker Hub description is
-taken from [`DOCKERHUB.md`](DOCKERHUB.md).
+taken from [`DOCKERHUB.md`](DOCKERHUB.md). Once the images are out, `.github/workflows/release.yml` creates the GitHub
+release with the text from `docs/releases/<tag>.md`, so write that file first and push it to `main`:
 
 ```bash
-git tag v0.3.1
-git push origin v0.3.1
+git add docs/releases/v0.4.1.md && git commit -m "Release notes 0.4.1" && git push
+git tag v0.4.1
+git push origin v0.4.1
 ```
 
 Docker Hub needs two repository secrets (Settings › Secrets and variables › Actions): `DOCKERHUB_USERNAME` and
