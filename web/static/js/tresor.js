@@ -83,6 +83,8 @@ App.vorschau = {
     } catch (e) { /* privat */ }
     vorschauVerbergen();
     if (App.seitenleiste) App.seitenleiste.zeichnen();
+    // Die Karten der Startseite zeigten sonst die geloeschten Bilder weiter (bis zum naechsten Zeichnen).
+    if (weg.length && App.start && App.startZeichnen) App.startZeichnen();
     return weg.length;
   },
   // Bilder zu Hosts, die es nicht mehr gibt oder die kein VNC mehr haben, entfernen (etwa in einem
@@ -422,12 +424,43 @@ App.hostBearbeiten = function (h) {
   const f = {};
   let dlg = null;
 
-  // Fehlermeldung oben im Dialog
+  // Fehlermeldung oben im Dialog (Server, Tresor). Fehler in einem Feld zeigt feldFehler.
   const meldung = el('div', { class: 'meldung fehler versteckt', role: 'alert' });
+  let bildlaufUhr = 0;
+  const sanft = () => (window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth');
   const fehlerZeigen = (text) => {
     ersetzen(meldung, icon('warnung'), el('span', null, text));
     meldung.classList.remove('versteckt');
-    if (dlg) dlg.element.scrollTo({ top: 0, behavior: 'smooth' });
+    clearTimeout(bildlaufUhr);
+    if (dlg) dlg.element.scrollTo({ top: 0, behavior: sanft() });
+  };
+  // Holt ziel in die Mitte des freien Bereichs zwischen klebendem Kopf und klebendem Fuss (nicht
+  // dahinter). Ist ziel hoeher als der freie Bereich, steht sein Anfang oben.
+  const feldZeigen = (ziel) => {
+    if (!dlg) return;
+    clearTimeout(bildlaufUhr);
+    const box = dlg.element;
+    const klebt = (x) => (x && getComputedStyle(x).position === 'sticky' ? x.offsetHeight : 0);
+    const oben = klebt(box.querySelector('.dialog-kopf'));
+    const unten = klebt(box.querySelector('.dialog-fuss'));
+    const r = ziel.getBoundingClientRect();
+    const lage = r.top - box.getBoundingClientRect().top - box.clientTop + box.scrollTop; // Lage im Inhalt
+    const frei = box.clientHeight - oben - unten;
+    box.scrollTo({ top: Math.max(0, lage - oben - Math.max(8, (frei - r.height) / 2)), behavior: sanft() });
+  };
+  // Fehler in einem Feld: Meldung rot direkt unter dem Feld (aria-describedby zeigt auf hinweisEl),
+  // «Erweitert» bei Bedarf aufklappen, das Feld samt Beschriftung und Meldung in den Sichtbereich
+  // holen und fokussieren. Die Sammelmeldung oben bleibt zu — sie laege ausserhalb des Bildes.
+  // Tippen ins Feld setzt den Hinweis zurueck (jeweils oninput).
+  const feldFehler = (input, hinweisEl, text) => {
+    meldung.classList.add('versteckt');
+    hinweisEl.textContent = text;
+    hinweisEl.classList.add('fehler');
+    hinweisEl.classList.remove('versteckt');
+    input.setAttribute('aria-invalid', 'true');
+    if (erwBereich.contains(input)) erweitertSetzen(true, true);
+    feldZeigen(input.closest('.feld') || input);
+    input.focus({ preventScroll: true });
   };
 
   // --- Geraetetyp: Knopf mit Symbol und Name, darunter das Raster zum Waehlen ---
@@ -519,12 +552,20 @@ App.hostBearbeiten = function (h) {
         el('div', { class: 'zugang-info' },
           el('span', { class: 'geraet-feld ' + (z.art === 'schluessel' ? 'art-schluessel' : 'art-passwort') }, icon(z.art === 'schluessel' ? 'schluessel' : 'schloss', 16)),
           el('span', { class: 'haupt' }, el('b', null, z.name), el('small', null, t(z.art === 'schluessel' ? 'hosts.host.schluesselAusTresor' : 'hosts.host.passwortAusTresor'))),
-          el('button', { class: 'btn klein', type: 'button', onclick: () => { erweitertSetzen(true); f.anmeldung.focus(); } }, t('hosts.knopf.aendern'))));
+          el('button', { class: 'btn klein', type: 'button', onclick: () => { erweitertSetzen(true); f.anmeldung.focus({ preventScroll: true }); } }, t('hosts.knopf.aendern'))));
     }
   };
 
   // --- Erweitert ---
-  f.port = el('input', { id: 'h-port', type: 'number', inputmode: 'numeric', min: 1, max: 65535, value: h.port || 22 });
+  // Hinweis unter dem Port nur bei einem Fehler (sonst leer und versteckt).
+  const portHinweis = el('div', { id: 'h-port-hinweis', class: 'hinweis versteckt' });
+  f.port = el('input', { id: 'h-port', type: 'number', inputmode: 'numeric', min: 1, max: 65535, value: h.port || 22, 'aria-describedby': 'h-port-hinweis',
+    oninput: () => {
+      f.port.removeAttribute('aria-invalid');
+      portHinweis.textContent = '';
+      portHinweis.classList.remove('fehler');
+      portHinweis.classList.add('versteckt');
+    } });
   f.anmeldung = el('select', { id: 'h-anmeldung', onchange: () => anmeldungZeigen() },
     el('option', { value: 'eigen' }, t('hosts.host.passwortOben')),
     andereZugaenge.length ? el('optgroup', { label: t('hosts.host.ausTresor') },
@@ -547,7 +588,8 @@ App.hostBearbeiten = function (h) {
   // Weg «direkt»: TCP zur Adresse des Hosts, unverschluesselt (HMI-Panels ohne SSH).
   // Passwort: verschluesselt im Tresor; leer = unveraendert, ohne gespeichertes fragt Keyway beim Verbinden.
   f.vnc = el('input', { type: 'checkbox', id: 'h-vnc', class: 'schalter', role: 'switch', checked: !!h.vnc, 'aria-describedby': 'h-vnc-hinweis' });
-  f.vncPort = el('input', { id: 'h-vnc-port', type: 'number', inputmode: 'numeric', min: 1, max: 65535, value: h.vncPort || 5900, 'aria-describedby': 'h-vnc-port-hinweis' });
+  f.vncPort = el('input', { id: 'h-vnc-port', type: 'number', inputmode: 'numeric', min: 1, max: 65535, value: h.vncPort || 5900, 'aria-describedby': 'h-vnc-port-hinweis',
+    oninput: () => { f.vncPort.removeAttribute('aria-invalid'); vncPortHinweis.classList.remove('fehler'); vncZeigen(); } });
   let vncWeg = h.vncWeg === 'direkt' ? 'direkt' : 'ssh';
   const wegKarte = (wert, titel, text, marke) => el('label', { class: 'weg-karte' },
     el('input', { type: 'radio', name: 'h-vnc-weg', value: wert, checked: vncWeg === wert, onchange: () => { vncWeg = wert; vncZeigen(); } }),
@@ -589,7 +631,8 @@ App.hostBearbeiten = function (h) {
     const an = f.vnc.checked;
     vncFelder.classList.toggle('versteckt', !an);
     direktWarnung.classList.toggle('versteckt', vncWeg !== 'direkt');
-    vncPortHinweis.textContent = t(vncWeg === 'direkt' ? 'hosts.vnc.portHinweis' : 'hosts.vnc.portHinweisSsh');
+    // Eine Fehlermeldung am VNC-Port bleibt stehen, bis jemand dort tippt.
+    if (!vncPortHinweis.classList.contains('fehler')) vncPortHinweis.textContent = t(vncWeg === 'direkt' ? 'hosts.vnc.portHinweis' : 'hosts.vnc.portHinweisSsh');
     // Aus mit gespeichertem Passwort: es wird beim Speichern geloescht (wie beim SSH-Passwort).
     vncAusHinweis.textContent = !an && vncHatPw ? t('hosts.vnc.ausPwWeg') : '';
     vncAusHinweis.classList.toggle('versteckt', an || !vncHatPw);
@@ -628,7 +671,7 @@ App.hostBearbeiten = function (h) {
   const erwBereich = el('div', { id: 'h-erweitert', class: 'erweitert versteckt' },
     feld('h-anmeldung', t('hosts.host.anmeldenMit'), f.anmeldung, t(andereZugaenge.length ? 'hosts.host.anmeldenHinweis' : 'hosts.host.anmeldenHinweisLeer')),
     el('div', { class: 'raster2' },
-      feld('h-port', t('hosts.host.port'), f.port),
+      el('div', { class: 'feld' }, el('label', { for: 'h-port' }, t('hosts.host.port')), f.port, portHinweis),
       feld('h-tags', t('hosts.host.tags'), f.tags, t('hosts.host.tagsHinweis'))),
     vncTeil,
     el('div', { class: 'feld' }, el('span', { class: 'label', id: 'h-farbe-label' }, t('hosts.host.farbe')), farbKnoepfe),
@@ -639,15 +682,17 @@ App.hostBearbeiten = function (h) {
     onclick: () => erweitertSetzen(erwKnopf.getAttribute('aria-expanded') !== 'true') },
   el('span', { class: 'chevron' }, icon('weiter', 16)),
   el('span', { class: 'erw-titel' }, el('b', null, t('hosts.host.erweitert')), erwText));
-  const erweitertSetzen = (auf) => {
+  // ohneBildlauf: feldFehler holt danach selbst das Feld ins Bild (sonst gewaenne dieser Bildlauf).
+  const erweitertSetzen = (auf, ohneBildlauf) => {
     erwKnopf.setAttribute('aria-expanded', auf ? 'true' : 'false');
     erwBereich.classList.toggle('versteckt', !auf);
+    clearTimeout(bildlaufUhr);
     // Aufgeklappt: «Erweitert» unter den (klebenden) Dialogkopf schieben, damit der Inhalt sichtbar wird.
-    if (auf && dlg) {
+    if (auf && dlg && !ohneBildlauf) {
       const box = dlg.element;
       const kopf = box.querySelector('.dialog-kopf');
       const ziel = erwTeil.getBoundingClientRect().top - box.getBoundingClientRect().top + box.scrollTop - (kopf ? kopf.offsetHeight : 0) - 8;
-      setTimeout(() => box.scrollTo({ top: Math.max(0, ziel), behavior: 'smooth' }), 20);
+      bildlaufUhr = setTimeout(() => box.scrollTo({ top: Math.max(0, ziel), behavior: sanft() }), 20);
     }
   };
 
@@ -678,36 +723,30 @@ App.hostBearbeiten = function (h) {
     meldung.classList.add('versteckt');
     const adresse = f.adresse.value.trim();
     if (!adresse) {
-      f.adresse.setAttribute('aria-invalid', 'true');
-      fehlerZeigen(t('hosts.host.fehlerAdresse'));
-      f.adresse.focus();
+      feldFehler(f.adresse, adrHinweis, t('hosts.host.fehlerAdresse'));
       return null;
     }
     if (/[\s/@]/.test(adresse)) {
-      const text = t(/\s/.test(adresse) ? 'hosts.host.fehlerAdresseLeerzeichen' : 'hosts.host.fehlerAdresseZeichen');
-      adrHinweisSetzen(text, true);
-      fehlerZeigen(text);
-      f.adresse.focus();
+      feldFehler(f.adresse, adrHinweis, t(/\s/.test(adresse) ? 'hosts.host.fehlerAdresseLeerzeichen' : 'hosts.host.fehlerAdresseZeichen'));
       return null;
     }
-    const port = f.port.value.trim() === '' ? 22 : Number(f.port.value);
-    if (!Number.isInteger(port) || port < 1 || port > 65535) {
-      erweitertSetzen(true);
-      fehlerZeigen(t('hosts.host.fehlerPort'));
+    // Leer = Vorgabe. Unlesbares wie «22e» liefert bei type=number ebenfalls '' (badInput): Fehler.
+    const zahl = (input, vorgabe) => (input.validity && input.validity.badInput ? NaN : input.value.trim() === '' ? vorgabe : Number(input.value));
+    const gueltig = (p) => Number.isInteger(p) && p >= 1 && p <= 65535;
+    const port = zahl(f.port, 22);
+    if (!gueltig(port)) {
+      feldFehler(f.port, portHinweis, t('hosts.host.fehlerPort'));
       return null;
     }
     const vnc = f.vnc.checked;
-    let vncPort = f.vncPort.value.trim() === '' ? 5900 : Number(f.vncPort.value);
-    if (!Number.isInteger(vncPort) || vncPort < 1 || vncPort > 65535) {
+    let vncPort = zahl(f.vncPort, 5900);
+    if (!gueltig(vncPort)) {
       if (vnc) {
-        erweitertSetzen(true);
-        f.vncPort.setAttribute('aria-invalid', 'true');
-        fehlerZeigen(t('hosts.vnc.fehlerPort'));
+        feldFehler(f.vncPort, vncPortHinweis, t('hosts.vnc.fehlerPort'));
         return null;
       }
       vncPort = 5900; // ausgeschaltet: der Port zaehlt nicht
     }
-    f.vncPort.removeAttribute('aria-invalid');
     const name = f.name.value.trim() || adresse;
     const benutzer = f.benutzer.value.trim();
     const pw = f.passwort.value;

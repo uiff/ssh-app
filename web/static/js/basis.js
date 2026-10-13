@@ -78,7 +78,10 @@ const ICONS = {
   vollbild: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
   vollbildAus: 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5',
   ablage: 'M9 3h6v3H9zM9 4.5H5V21h14V4.5h-4M9 11h6M9 15h4',
-  sondertaste: 'M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z',
+  // Sondertasten: eine Tastenkappe (neutral, nicht das Mac-Zeichen)
+  sondertaste: 'M4 4h16v16H4zM7.5 7.5h9v7h-9zM9 17.5h6',
+  lupePlus: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4M8 11h6M11 8v6',
+  lupeMinus: 'M11 18a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM20 20l-4-4M8 11h6',
   trennen: 'M9 15l-2 2a3 3 0 0 1-4.2-4.2l2-2M15 9l2-2a3 3 0 0 1 4.2 4.2l-2 2M8 3v3M3 8h3M16 21v-3M21 16h-3',
   chevronRunter: 'M6 9l6 6 6-6',
   chevronHoch: 'M6 15l6-6 6 6',
@@ -286,11 +289,12 @@ function eingabe(label, { titel, wert = '', hinweis, passwort = false, ok = t('b
 
 // Kontextmenue: am Element (Desktop) oder als Blatt unten (Telefon).
 // Escape schliesst, Pfeiltasten waehlen; ein zweites Oeffnen ersetzt das erste samt Schleier.
-function menue(anker, eintraege) {
+// opt.klasse: zusaetzliche Klasse (z. B. «raster»: Eintraege als Raster, Funktionstasten).
+function menue(anker, eintraege, opt) {
   document.querySelectorAll('.menue, .menue-schleier').forEach((m) => m.remove());
   if (menue.offen) menue.offen();
   const schleier = el('div', { class: 'schleier menue-schleier', style: { background: App.istTelefon() ? 'rgba(5,6,8,.5)' : 'transparent' } });
-  const m = el('div', { class: 'menue', role: 'menu' });
+  const m = el('div', { class: 'menue' + (opt && opt.klasse ? ' ' + opt.klasse : ''), role: 'menu' });
   const vorher = document.activeElement;
   let offen = true;
   function zu(ohneFokus) {
@@ -312,7 +316,7 @@ function menue(anker, eintraege) {
   }
   for (const e of eintraege) {
     if (!e) continue;
-    m.append(el('button', { type: 'button', role: 'menuitem', class: (e.gefahr ? 'gefahr' : '') + (e.aktiv ? ' aktiv' : ''), 'aria-current': e.aktiv ? 'true' : null,
+    m.append(el('button', { type: 'button', role: 'menuitem', class: (e.gefahr ? 'gefahr' : '') + (e.aktiv ? ' aktiv' : '') + (e.klasse ? ' ' + e.klasse : ''), 'aria-current': e.aktiv ? 'true' : null,
       onclick: () => { zu(true); e.aktion(); } },
       e.symbol || (e.icon ? icon(e.icon) : null), e.text));
   }
@@ -481,8 +485,14 @@ function tTeile(schluessel, elemente) {
 // Aus dem Mehr-Menue heraus baut das Schliessen des Menues gleich danach seinen Verlaufseintrag
 // ab (history.back()); diese Verlaufs-Navigation braeche das Neuladen ab, die Seite bliebe in
 // der alten Sprache. Den Eintrag raeumt nach dem Neuladen der Start dieser Datei ab.
-App.spracheWechseln = function (l) {
+// Bildschirme (VNC) enden mit dem Neuladen und lassen sich nicht wieder anhaengen: vorher fragen.
+App.spracheWechseln = async function (l) {
   if (spracheNormal(l) === I18N.sprache) return;
+  const bildschirme = App.offeneBildschirme ? App.offeneBildschirme() : [];
+  if (bildschirme.length) {
+    const text = bildschirme.length === 1 ? t('basis.spracheFrage1', { titel: bildschirme[0].titel }) : t('basis.spracheFrage', { n: bildschirme.length });
+    if (!(await frage(text, { titel: t('basis.spracheWechseln'), ja: t('basis.spracheJa'), gefahr: true }))) return;
+  }
   spracheSetzen(l, true);
   seiteLaedtNeu = true;
   location.reload();

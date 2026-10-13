@@ -81,22 +81,41 @@ screen opens as a tab next to your terminals, and you can have several open at o
   doesn’t save a password typed there, and the login dialog says so. Methods that need TLS inside the VNC connection
   (VeNCrypt with TLS or X.509) don’t work in the browser. For such devices, switch the VNC server to VNC password
   authentication and let the SSH tunnel do the encryption.
+- **The device’s key is remembered:** if the device identifies itself with a key (RealVNC Server with its RSA-AES
+  login), Keyway shows its signature the way RealVNC shows it on the device, plus a SHA-256 fingerprint. Just like an
+  SSH host key, Keyway remembers the key once you confirm it, asks again only if the key changes (with a clear
+  warning), and lists it in Settings under Known host keys, where you can remove it.
 - **Toolbar:**
-  - **View:** Fit (the whole screen in the window), Actual size (1:1, with scrolling), or Remote resize (the device
-    changes its resolution to fit the window, if its VNC server supports that; otherwise the picture is fitted).
-  - **Quality:** Automatic, High, Medium, or Low. Lower quality needs less data on slow connections.
-  - **View only:** watch without sending mouse or keyboard input to the device.
-  - **Clipboard:** send text to the device’s clipboard, and see and copy the text last copied on the device.
+  - **View and zoom:** Fit (the whole screen in the window); zoom with − and + or the levels 100%, 150%, and 200%, in
+    this browser only (the device stays the same, the zoomed picture gets scroll bars, and clicks land where you
+    point); or Remote resize (the device changes its resolution to fit the window, if its VNC server supports that;
+    otherwise the picture is fitted). Remote resize changes the screen for everyone viewing it, so Keyway sets the
+    device back to its previous resolution when you choose another view, disconnect, or close the tab. If that didn’t
+    happen, for example after a browser crash, the View menu offers **Restore resolution**.
+  - **Quality:** Automatic, High, Medium, or Low, shown on the button (“Quality: Auto”). Lower quality needs less data
+    on slow connections.
+  - **View only:** watch without sending mouse or keyboard input to the device. It applies to this tab only, and a
+    “View only” badge on the picture shows it; click or tap the badge to take control.
+  - **Clipboard:** send text to the device’s clipboard, and see and copy the text last copied on the device. If the
+    device only understands Western European characters (Latin-1), the dialog lists the characters that would arrive
+    there as “?” before you send.
   - **Special keys:** <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Del</kbd>, Windows key, <kbd>Alt</kbd>+<kbd>Tab</kbd>, Esc,
     Tab, Print Screen, and F1 to F12, which the browser or your own computer would otherwise catch.
   - **Full screen** and **Disconnect.** A disconnected screen keeps its last picture, dimmed, and has a Reconnect
     button, just like a terminal.
 
-  This browser remembers view, quality, and View only for each host.
+  This browser remembers view, zoom level, and quality for each host. On touch devices it never remembers Remote
+  resize, so opening a screen doesn’t change the device’s resolution unasked. <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>K</kbd>
+  opens the search even while the screen has the keyboard.
 - **On your phone:** tap to click, long press to right-click, drag to drag with the mouse, two fingers to scroll.
-  Pinching sends <kbd>Ctrl</kbd> with the mouse wheel, which zooms in many programs on the device. In Actual size,
-  **Pan** lets you move the picture by dragging, while tapping still clicks. The Keyboard button brings up the
-  on-screen keyboard.
+  Pinching zooms the picture in this browser only, and the point under your fingers stays put. When zoomed, one finger
+  moves the picture (**Pan**, on by default) while tapping still clicks, and a zoom pill with − and + shows the level.
+  The **Keyboard** button brings up the on-screen keyboard, and **Keys** shows a key row below the picture: Esc, Tab,
+  <kbd>Ctrl</kbd>, <kbd>Alt</kbd>, <kbd>Shift</kbd>, and <kbd>Win</kbd> as latches for the next key, typed character,
+  or tap (<kbd>Ctrl</kbd> and a tap make a Ctrl+click), arrows, Home/End, Page Up/Down, Del, a menu with F1 to F12, the
+  Windows key on its own, <kbd>Alt</kbd>+<kbd>Tab</kbd>, Print Screen, and Insert, and
+  <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Del</kbd>. The on-screen keyboard stays open while you use the row. On a tablet,
+  **Special keys** in the toolbar shows the same row. In landscape, the toolbar moves to the right edge.
 - **Preview pictures:** a small picture of the screen, for the home page and the host list. It is stored only in this
   browser, never on the server and not in the backup. It is updated every 30 seconds while connected, also in View
   only, and when you disconnect. Because it can show confidential content, you can turn saving previews off in
@@ -188,15 +207,16 @@ screen opens as a tab next to your terminals, and you can have several open at o
 - **Key bar** with Esc, Tab, Ctrl, Alt, arrows, Home/End, Page Up/Down, <kbd>Ctrl</kbd>+<kbd>C</kbd>/<kbd>D</kbd>/<kbd>Z</kbd>/<kbd>R</kbd>,
   common shell symbols, and paste and copy.
 - **Built for touch:** the menu, Files, and the command help open as sheets, and every touch target is at least 44 px.
-- **Remote screen by touch:** gestures for clicking, right-clicking, dragging, and scrolling, plus a button for the
-  on-screen keyboard (see [Remote screen (VNC)](#remote-screen-vnc)).
+- **Remote screen by touch:** gestures for clicking, right-clicking, dragging, scrolling, and zooming, the on-screen
+  keyboard, and a key row with Ctrl, Alt, Shift, Win, and F1 to F12 (see [Remote screen (VNC)](#remote-screen-vnc)).
 - **Home screen:** add Keyway to your home screen and it runs like an app.
 
 ### Language and look
 
 - **English and German:** the interface follows your browser language. You can switch it on the sign-in page, in the
-  menu, or in Settings › Appearance. The page reloads and running terminals reconnect on their own. Messages from the
-  server, such as connection errors, come in the same language.
+  menu, or in Settings › Appearance. The page reloads and running terminals reconnect on their own. Open screens (VNC)
+  are disconnected, so the app asks first. Messages from the server, such as connection errors, come in the same
+  language.
 - **Accent color:** violet by default, or blue, teal, green, amber, or pink. The choice is saved per browser. Warnings
   keep their own colors.
 - **Terminal font size** can be set per browser.
@@ -327,7 +347,7 @@ with `go run`, the program defaults apply (column “Without container”).
 | `SSHAPP_HOSTS` | – | – | Additional host names for the app, comma-separated; `*.example.com` covers all subdomains (DNS rebinding protection, see below). When set, the app always checks the name, also over HTTPS |
 | `SSHAPP_ORIGINS` | – | – | Additional allowed origins (`Origin`) for the terminal and VNC WebSockets, comma-separated, patterns like `https://*.example.com`. Only needed if a proxy changes the Host header |
 | `SSHAPP_HSTS` | – | – | `1` = send Strict-Transport-Security: browsers then use only HTTPS for this name for one year, on all ports. Only set it if everything under this name speaks HTTPS |
-| `SSHAPP_LEERLAUF_MIN` | `30` | `30` | Minutes without activity until the sign-in expires and the vault locks. Activity means typing in the terminal, input on a VNC screen, and actions in the app; background polling doesn’t count. Running terminal sessions stay alive and can be reopened after signing in; VNC screens are disconnected |
+| `SSHAPP_LEERLAUF_MIN` | `30` | `30` | Minutes without activity until the sign-in expires and the vault locks. Activity means typing in the terminal, input on a VNC screen (just watching, also in View only, doesn’t count), and actions in the app; background polling doesn’t count. Running terminal sessions stay alive and can be reopened after signing in; VNC screens are disconnected |
 
 **DNS rebinding protection:** a malicious website could point its own name at the app’s address. That is why the app
 checks the name it is called by in HTTP mode (`SSHAPP_TLS=aus`), and always as soon as `SSHAPP_HOSTS` is set. The only
@@ -439,7 +459,8 @@ at startup.
 - VNC: through SSH, the screen travels inside the encrypted SSH connection. With “direct”, the VNC connection between
   Keyway and the device is unencrypted, so use it only on a network you trust. The VNC password stays on the server:
   Keyway logs in to the VNC server itself, and the browser only gets the screen. Keyway connects only to the address and
-  port saved with the host.
+  port saved with the host. When the login is passed through to the browser and the device presents a key (RealVNC
+  RSA-AES), Keyway remembers it like an SSH host key and warns you if it changes.
 - The image contains no shell and runs as an unprivileged user (65532). The Compose file also sets a read-only file
   system and drops all Linux capabilities.
 - Setup is open until someone completes it. So set the app up right after starting it (see above).
@@ -454,7 +475,8 @@ node --experimental-websocket tools/klicktest.js <url> <ssh-host> <port> <user> 
 ```
 
 `tools/klicktest.js` clicks through the interface in headless Chrome and takes photos along the way. With `-` as
-`<ssh-host>` it tests the interface without an SSH target. `SPRACHE=de|en` picks the interface language.
+`<ssh-host>` it tests the interface without an SSH target. `SPRACHE=de|en` picks the interface language, and
+`CDP_PORT=<port>` sets a fixed port for remote-controlling Chrome (otherwise a random one).
 
 What the click test needs:
 
@@ -491,7 +513,8 @@ In Keyway, add a host with the address `127.0.0.1`, turn on VNC with port 5999, 
 tunnel, use the test SSH server as the host instead (connection Tunneled over SSH, VNC port 5999): its port forwarding
 reaches your machine. `-typ vencrypt` tests the pass-through (login in the browser), `-version 3.3` an old server, and
 `-bild <file.png>` shows a picture of your own. With the test VNC server running, `VNC_PORT=5999 VNC_PW=secret` also
-lets `tools/klicktest.js` check the screen tab (password prompt, clicks, toolbar, phone keyboard, preview).
+lets `tools/klicktest.js` check the screen tab (password prompt, clicks, toolbar, zoom with clicks in the right place,
+View only badge, phone keyboard and key row, preview).
 
 The screen viewer (noVNC) logs to the browser console only when asked to: set `localStorage` key
 `sshapp.vncProtokoll` to `"debug"`, `"info"`, `"warn"`, or `"error"` and reload the page.

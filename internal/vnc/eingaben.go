@@ -3,16 +3,23 @@ package vnc
 import "encoding/binary"
 
 // Eingaben erkennt im Datenstrom des Browsers zum VNC-Server (ab ClientInit) die
-// Nachrichten, die Bedienung sind: Tasten, Zeiger, Zwischenablage, Bildschirmgroesse.
+// Nachrichten, die Bedienung sind: Tasten, Zeiger, Bildschirmgroesse, XVP.
 // Automatische Nachrichten des Viewers (Bildanforderungen, Kodierungen, Fences …)
-// zaehlen nicht, damit ein offenes Fenster die Anmeldung nicht ewig verlaengert.
-// Versteht Eingaben eine Nachricht nicht, zaehlt ab dann jeder Datenblock als Bedienung.
+// zaehlen nicht, damit ein offenes Fenster die Anmeldung nicht ewig verlaengert. Die
+// Zwischenablage (ClientCutText, auch erweitert) zaehlt ebenfalls nicht: noVNC beantwortet
+// die Zwischenablage des Servers von selbst (Caps, Request, Provide, Notify), auch bei
+// «Nur ansehen». Fuegt der Anwender etwas ein, meldet die Seite das mit {t:"bedient"}.
+// Versteht Eingaben eine Nachricht nicht, ist der Strom ab dann nicht mehr lesbar, und
+// kein Datenblock zaehlt mehr (wie beim Durchreichen; es bleibt «bedient» der Seite).
 type Eingaben struct {
 	clientInit bool   // ClientInit (1 Byte) schon gesehen
 	kopf       []byte // gesammelter Kopf der laufenden Nachricht
 	rest       int    // noch zu ueberspringende Bytes der laufenden Nachricht
 	unbekannt  bool
 }
+
+// Unlesbar meldet, ob Eingaben eine Nachricht nicht verstanden hat (ab dann zaehlt nichts).
+func (e *Eingaben) Unlesbar() bool { return e.unbekannt }
 
 // Nachrichtentypen Browser -> Server (RFC 6143 und Erweiterungen, wie noVNC sie sendet).
 const (
@@ -33,7 +40,7 @@ const (
 func (e *Eingaben) Pruefen(p []byte) (bedient bool) {
 	for len(p) > 0 {
 		if e.unbekannt {
-			return true
+			return bedient
 		}
 		if !e.clientInit {
 			e.clientInit = true
@@ -52,7 +59,7 @@ func (e *Eingaben) Pruefen(p []byte) (bedient bool) {
 		laenge, eingabe, ok := nachrichtLaenge(e.kopf)
 		if !ok {
 			e.unbekannt = true
-			return true
+			return bedient
 		}
 		if laenge < 0 {
 			continue // Kopf noch unvollstaendig
@@ -89,9 +96,9 @@ func nachrichtLaenge(k []byte) (laenge int, eingabe, ok bool) {
 			return 7, true, true
 		}
 		return 6, true, true
-	case msgZwischenablage:
+	case msgZwischenablage: // keine Bedienung (siehe Eingaben)
 		if len(k) < 8 {
-			return -1, true, true
+			return -1, false, true
 		}
 		n := int32(binary.BigEndian.Uint32(k[4:8]))
 		if n < 0 { // erweiterte Zwischenablage: Laenge negativ
@@ -100,7 +107,7 @@ func nachrichtLaenge(k []byte) (laenge int, eingabe, ok bool) {
 		if n < 0 {
 			return 0, false, false
 		}
-		return 8 + int(n), true, true
+		return 8 + int(n), false, true
 	case msgFortlaufend:
 		return 10, false, true
 	case msgFence:

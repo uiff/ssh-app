@@ -82,24 +82,44 @@ und bedienen. Jeder Bildschirm öffnet sich als Tab neben den Terminals, auch me
   Ein dort eingegebenes Passwort speichert Keyway nicht, der Anmeldedialog sagt das. Verfahren, die TLS innerhalb der
   VNC-Verbindung brauchen (VeNCrypt mit TLS oder X.509), gehen im Browser nicht. Bei solchen Geräten den VNC-Server auf
   VNC-Passwort umstellen und die Verschlüsselung dem SSH-Tunnel überlassen.
+- **Der Schlüssel des Geräts wird gemerkt:** Weist sich das Gerät mit einem Schlüssel aus (RealVNC Server mit seiner
+  RSA-AES-Anmeldung), zeigt Keyway dessen Signatur so, wie RealVNC sie am Gerät anzeigt, dazu einen
+  SHA-256-Fingerabdruck. Wie einen SSH-Host-Schlüssel merkt sich Keyway ihn nach deiner Bestätigung, fragt erst wieder,
+  wenn er sich ändert (mit deutlicher Warnung), und listet ihn in den Einstellungen unter «Bekannte Host-Schlüssel»,
+  wo du ihn auch entfernen kannst.
 - **Werkzeugleiste:**
-  - **Ansicht:** Anpassen (der ganze Bildschirm im Fenster), Originalgrösse (1:1, mit Scrollen) oder Fernauflösung (das
-    Gerät stellt seine Auflösung auf das Fenster ein, sofern sein VNC-Server das kann; sonst wird das Bild angepasst).
-  - **Qualität:** Automatisch, Hoch, Mittel oder Niedrig. Niedrige Qualität braucht auf langsamen Leitungen weniger
-    Daten.
-  - **Nur ansehen:** zuschauen, ohne Maus und Tastatur an das Gerät zu schicken.
+  - **Ansicht und Zoom:** Anpassen (der ganze Bildschirm im Fenster); Zoom mit − und + oder den Stufen 100 %, 150 % und
+    200 %, nur in diesem Browser (das Gerät bleibt gleich, das vergrösserte Bild bekommt Rollbalken, Klicks landen
+    dort, wo du hinzeigst); oder Fernauflösung (das Gerät stellt seine Auflösung auf das Fenster ein, sofern sein
+    VNC-Server das kann; sonst wird das Bild angepasst). Die Fernauflösung ändert den Bildschirm für alle, die ihn
+    sehen. Deshalb stellt Keyway das Gerät auf die vorherige Auflösung zurück, wenn du eine andere Ansicht wählst,
+    trennst oder den Tab schliesst. Blieb das aus, etwa nach einem Absturz des Browsers, bietet das Menü «Ansicht»
+    **Auflösung zurückstellen** an.
+  - **Qualität:** Automatisch, Hoch, Mittel oder Niedrig, sichtbar auf dem Knopf («Qualität: Auto»). Niedrige Qualität
+    braucht auf langsamen Leitungen weniger Daten.
+  - **Nur ansehen:** zuschauen, ohne Maus und Tastatur an das Gerät zu schicken. Es gilt nur für diesen Tab, eine
+    Plakette «Nur ansehen» im Bild zeigt es an. Ein Klick oder Tippen auf die Plakette schaltet es aus.
   - **Zwischenablage:** Text in die Zwischenablage des Geräts senden und den zuletzt auf dem Gerät kopierten Text sehen
-    und kopieren.
+    und kopieren. Versteht das Gerät nur westeuropäische Zeichen (Latin-1), nennt der Dialog vor dem Senden die
+    Zeichen, die dort als «?» ankämen.
   - **Sondertasten:** <kbd>Strg</kbd>+<kbd>Alt</kbd>+<kbd>Entf</kbd>, Windows-Taste, <kbd>Alt</kbd>+<kbd>Tab</kbd>, Esc,
     Tab, Bildschirm drucken und F1 bis F12, die sonst der Browser oder der eigene Rechner abfangen würden.
   - **Vollbild** und **Trennen.** Ein getrennter Bildschirm behält sein letztes Bild abgedunkelt und hat wie ein
     Terminal einen Knopf «Neu verbinden».
 
-  Ansicht, Qualität und «Nur ansehen» merkt sich dieser Browser je Host.
+  Ansicht, Zoomstufe und Qualität merkt sich dieser Browser je Host. Die Fernauflösung merkt er sich auf Geräten mit
+  Touch nie, damit das Öffnen eines Bildschirms nicht ungefragt die Auflösung des Geräts ändert.
+  <kbd>Strg</kbd>+<kbd>Umschalt</kbd>+<kbd>K</kbd> öffnet die Suche auch, wenn der Bildschirm die Tastatur hat.
 - **Auf dem Telefon:** Tippen klickt, langes Drücken klickt rechts, Ziehen zieht mit der Maus, mit zwei Fingern
-  scrollen. Spreizen und Zusammenziehen schickt <kbd>Strg</kbd> mit dem Mausrad, das zoomt in vielen Programmen auf dem
-  Gerät. In der Originalgrösse verschiebt **Verschieben** das Bild beim Ziehen, Tippen klickt weiterhin. Der Knopf
-  **Tastatur** holt die Bildschirmtastatur.
+  scrollen. Spreizen vergrössert das Bild nur in diesem Browser, der Punkt unter den Fingern bleibt dabei stehen.
+  Vergrössert verschiebt ein Finger das Bild (**Verschieben**, von Haus aus an), Tippen klickt weiterhin, und eine
+  Zoom-Pille mit − und + zeigt die Stufe. Der Knopf **Tastatur** holt die Bildschirmtastatur, **Tasten** zeigt eine
+  Tastenreihe unter dem Bild: Esc, Tab, <kbd>Strg</kbd>, <kbd>Alt</kbd>, <kbd>Umschalt</kbd> und <kbd>Win</kbd> als
+  Feststeller für die nächste Taste, das nächste getippte Zeichen oder das nächste Tippen (<kbd>Strg</kbd> und Tippen
+  ergibt Strg+Klick), Pfeile, Pos1/Ende, Bild auf/ab, Entf, ein Menü mit F1 bis F12, der Windows-Taste allein,
+  <kbd>Alt</kbd>+<kbd>Tab</kbd>, Bildschirm drucken und Einfg sowie <kbd>Strg</kbd>+<kbd>Alt</kbd>+<kbd>Entf</kbd>. Die
+  Bildschirmtastatur bleibt dabei offen. Auf dem Tablet zeigt **Sondertasten** in der Werkzeugleiste dieselbe Reihe.
+  Quer steht die Werkzeugleiste am rechten Rand.
 - **Vorschaubilder:** ein kleines Bild des Bildschirms für Startseite und Host-Liste. Es liegt nur in diesem Browser,
   nie auf dem Server und nicht im Backup. Aktualisiert wird es während der Verbindung alle 30 Sekunden, auch bei «Nur
   ansehen», und beim Trennen. Weil es vertrauliche Inhalte zeigen kann, lässt sich das Speichern in den Einstellungen
@@ -193,14 +213,16 @@ und bedienen. Jeder Bildschirm öffnet sich als Tab neben den Terminals, auch me
 - **Tastenleiste** mit Esc, Tab, Strg, Alt, Pfeilen, Pos1/Ende, Bild auf/ab, <kbd>Strg</kbd>+<kbd>C</kbd>/<kbd>D</kbd>/<kbd>Z</kbd>/<kbd>R</kbd>,
   den häufigsten Sonderzeichen der Shell sowie Einfügen und Kopieren.
 - **Für die Finger gemacht:** Menü, Dateien und Hilfe öffnen als Blätter, jede Trefferfläche ist mindestens 44 px gross.
-- **Bildschirm mit den Fingern:** Gesten zum Klicken, Rechtsklicken, Ziehen und Scrollen, dazu ein Knopf für
-  die Bildschirmtastatur (siehe [Bildschirm (VNC)](#bildschirm-vnc)).
+- **Bildschirm mit den Fingern:** Gesten zum Klicken, Rechtsklicken, Ziehen, Scrollen und Vergrössern, die
+  Bildschirmtastatur und eine Tastenreihe mit Strg, Alt, Umschalt, Win und F1 bis F12 (siehe
+  [Bildschirm (VNC)](#bildschirm-vnc)).
 - **Startbildschirm:** Auf dem Startbildschirm abgelegt, läuft Keyway wie eine eigene App.
 
 ### Sprache und Aussehen
 
 - **Deutsch und Englisch:** Die Oberfläche folgt der Sprache des Browsers. Umstellen kannst du sie auf der Anmeldeseite,
   im Menü oder unter Einstellungen › Darstellung. Die Seite lädt dann neu, laufende Terminals verbinden sich von selbst wieder.
+  Offene Bildschirme (VNC) werden dabei getrennt, deshalb fragt die App vorher nach.
   Auch Meldungen des Servers, etwa zu Verbindungsfehlern, kommen in dieser Sprache.
 - **Akzentfarbe:** Vorgabe Violett, umstellbar auf Blau, Türkis, Grün, Bernstein oder Rosa. Die Wahl gilt für den
   jeweiligen Browser. Warnungen behalten ihre eigenen Farben.
@@ -333,7 +355,7 @@ Das Image setzt einige Variablen selbst (Spalte «Container»). Wer das Programm
 | `SSHAPP_HOSTS` | – | – | Zusätzlich erlaubte Namen der App, durch Komma getrennt, `*.firma.ch` für alle Unternamen (Schutz vor DNS-Rebinding, siehe unten). Ist die Variable gesetzt, prüft die App den Namen immer, auch mit HTTPS |
 | `SSHAPP_ORIGINS` | – | – | Zusätzlich erlaubte Herkunft (`Origin`) für die WebSockets von Terminal und VNC, durch Komma getrennt, Muster wie `https://*.firma.ch`. Nur nötig, wenn ein Proxy den Host-Kopf verändert |
 | `SSHAPP_HSTS` | – | – | `1` = Strict-Transport-Security senden: Browser rufen den Namen dann ein Jahr lang nur noch per HTTPS auf, auf allen Ports. Nur setzen, wenn alles unter diesem Namen HTTPS spricht |
-| `SSHAPP_LEERLAUF_MIN` | `30` | `30` | Minuten ohne Bedienung, bis die Anmeldung abläuft und der Tresor sich sperrt. Bedienung heisst Tippen im Terminal, Eingaben auf einem VNC-Bildschirm und Aktionen in der App; automatische Abfragen im Hintergrund zählen nicht. Laufende Terminal-Sitzungen bleiben bestehen und lassen sich nach der Anmeldung wieder öffnen, VNC-Bildschirme werden getrennt |
+| `SSHAPP_LEERLAUF_MIN` | `30` | `30` | Minuten ohne Bedienung, bis die Anmeldung abläuft und der Tresor sich sperrt. Bedienung heisst Tippen im Terminal, Eingaben auf einem VNC-Bildschirm (Zuschauen zählt nicht, auch nicht mit «Nur ansehen») und Aktionen in der App; automatische Abfragen im Hintergrund zählen nicht. Laufende Terminal-Sitzungen bleiben bestehen und lassen sich nach der Anmeldung wieder öffnen, VNC-Bildschirme werden getrennt |
 
 **Schutz vor DNS-Rebinding:** Eine fremde Webseite könnte ihren eigenen Namen auf die Adresse der App zeigen lassen. Deshalb
 prüft die App im HTTP-Betrieb (`SSHAPP_TLS=aus`) und immer, sobald `SSHAPP_HOSTS` gesetzt ist, unter welchem Namen sie
@@ -446,7 +468,9 @@ beim Start im Log hin.
 - VNC: Über SSH läuft der Bildschirm durch die verschlüsselte SSH-Verbindung. Mit «Direkt» ist die VNC-Verbindung
   zwischen Keyway und dem Gerät unverschlüsselt, deshalb nur in einem vertrauenswürdigen Netz verwenden. Das VNC-Passwort
   bleibt auf dem Server: Keyway meldet sich selbst am VNC-Server an, der Browser bekommt nur das Bild. Keyway verbindet
-  sich nur mit Adresse und Port, die beim Host gespeichert sind.
+  sich nur mit Adresse und Port, die beim Host gespeichert sind. Läuft die Anmeldung durchgereicht im Browser und weist
+  sich das Gerät mit einem Schlüssel aus (RealVNC RSA-AES), merkt sich Keyway ihn wie einen SSH-Host-Schlüssel und
+  warnt, wenn er sich ändert.
 - Das Image enthält keine Shell und läuft als unprivilegierter Benutzer (65532). Die Compose-Datei setzt zusätzlich ein nur
   lesbares Dateisystem und entzieht alle Linux-Capabilities.
 - Die Ersteinrichtung ist offen, bis jemand sie erledigt. Deshalb gleich nach dem Start einrichten (siehe oben).
@@ -461,7 +485,8 @@ node --experimental-websocket tools/klicktest.js <url> <ssh-host> <port> <benutz
 ```
 
 `tools/klicktest.js` klickt sich per Headless-Chrome durch die Oberfläche und macht dabei Fotos. Mit `-` als
-`<ssh-host>` prüft es die Oberfläche ohne SSH-Ziel. `SPRACHE=de|en` wählt die Sprache der Oberfläche.
+`<ssh-host>` prüft es die Oberfläche ohne SSH-Ziel. `SPRACHE=de|en` wählt die Sprache der Oberfläche,
+`CDP_PORT=<port>` einen festen Port für die Fernsteuerung von Chrome (sonst ein zufälliger).
 
 Was der Klicktest braucht:
 
@@ -499,7 +524,8 @@ den SSH-Tunnel stattdessen den Test-SSH-Server als Host nehmen (Verbindung «Üb
 Weiterleitung landet auf deinem Rechner. `-typ vencrypt` prüft das Durchreichen (Anmeldung im Browser), `-version 3.3`
 einen alten Server und `-bild <datei.png>` zeigt ein eigenes Bild. Läuft der Test-VNC-Server, prüft
 `tools/klicktest.js` mit `VNC_PORT=5999 VNC_PW=geheim` auch den Bildschirm-Tab (Passwort-Rückfrage, Klicks,
-Werkzeugleiste, Telefon-Tastatur, Vorschaubild).
+Werkzeugleiste, Zoom mit Klicks an der richtigen Stelle, Plakette «Nur ansehen», Telefon-Tastatur und Tastenreihe,
+Vorschaubild).
 
 Der Bildschirm-Viewer (noVNC) schreibt nur auf Wunsch in die Browser-Konsole: im `localStorage` den Schlüssel
 `sshapp.vncProtokoll` auf `"debug"`, `"info"`, `"warn"` oder `"error"` setzen und die Seite neu laden.

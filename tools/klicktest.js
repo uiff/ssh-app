@@ -13,12 +13,14 @@
 // Braucht eine FRISCHE Instanz (nicht eingerichtet) oder SSHAPP_USER/SSHAPP_PW fuer die Anmeldung.
 // SPRACHE=de|en: Sprache der Oberflaeche (gemerkt wie nach der Sprachwahl), sonst die des Browsers;
 // LANG_CHROME=en-US o.ae. setzt die Browsersprache (Chrome-Schalter --lang).
-// Chrome: CHROME=/pfad, sonst Puppeteer-Cache (~/.cache/puppeteer/chrome-headless-shell).
+// Chrome: CHROME=/pfad, sonst Puppeteer-Cache (~/.cache/puppeteer/chrome-headless-shell); CDP_PORT=<port>: fester
+// Port fuer die Fernsteuerung von Chrome (sonst zufaellig 9533..9632).
 // VNC_PORT=<port>: zusaetzlich den Bildschirm-Tab (VNC) pruefen, gegen einen Test-VNC-Server auf
 // 127.0.0.1:<port> mit Weg «direkt» (go run ./tools/testvnc -addr 127.0.0.1:<port> [-passwort x];
 // VNC_PW=x, falls er ein Passwort verlangt): Bild, Klick (das Bild aendert sich), Ansichten,
-// Fernaufloesung, Nur ansehen, Vollbild, Zwischenablage, Sondertasten, Telefon-Leiste und Tastatur,
-// Trennen mit Vorschaubild auf der Startseite.
+// lokaler Zoom 200 % (Klick an der richtigen Stelle), Fernaufloesung, Nur ansehen mit Plakette,
+// Vollbild, Zwischenablage, Sondertasten, Telefon-Leiste, Tastenreihe mit Feststellern und
+// Funktionstasten, Tastatur, Trennen mit Vorschaubild auf der Startseite.
 // DATEIEN_ORDNER=/pfad: zusaetzlich die Dateileiste pruefen (Arten, Menue ohne Download bei Pipe/Geraet,
 // Download-Fehler, Hochladen mit Konflikt-Rueckfrage, «folgt» ohne Dauerabfrage, erfolgreicher Download).
 // Der Ordner wird neu angelegt und muss auf dem Rechner des SSH-Ziels liegen — also nur mit dem
@@ -52,7 +54,7 @@ function chromePfad() {
 
 (async () => {
   fs.mkdirSync(fotos, { recursive: true });
-  const port = 9533 + Math.floor(Math.random() * 100);
+  const port = +process.env.CDP_PORT || 9533 + Math.floor(Math.random() * 100); // CDP_PORT: fester Port fuer Chrome
   const profil = fs.mkdtempSync(path.join(require('os').tmpdir(), 'sshapp-klicktest-'));
   const ch = spawn(chromePfad(), ['--headless=new', '--no-sandbox', '--disable-gpu', '--hide-scrollbars', '--ignore-certificate-errors',
     `--remote-debugging-port=${port}`, `--window-size=${W},${H}`, '--user-data-dir=' + profil, ...(LANG ? ['--lang=' + LANG] : []), 'about:blank'], { stdio: 'ignore' });
@@ -345,13 +347,24 @@ function chromePfad() {
     vorher = await ausschnitt(fx, fy);
     await klickAuf(fx, fy);
     if ((await ausschnitt(fx, fy)) !== vorher) probleme.push('Bildschirm: «Nur ansehen» laesst Klicks durch');
-    await foto('bildschirm-nur-ansehen'); await deutsch('Nur ansehen');
+    await foto('bildschirm-nur-ansehen'); await deutsch('Nur ansehen'); await flaechen('Nur ansehen');
+    if (!(await ev('!App.aktiv.plakette.classList.contains("versteckt") && App.aktiv.plakette.getClientRects().length > 0'))) probleme.push('Bildschirm: «Nur ansehen» ohne Plakette im Bild');
     await ev('App.aktiv.nurAnsehenSetzen(false)');
     // Ansichten: Originalgroesse (Desktop 1:1), Fernaufloesung (Geraet nimmt die Groesse der Flaeche an), Anpassen
     await ev('App.aktiv.ansichtSetzen("original")'); await warte(900);
     let c = await leinwand();
     if (!MOBIL && Math.abs(c.w - c.cw) > 1) probleme.push('Bildschirm: Originalgroesse nicht 1:1 ' + JSON.stringify(c));
     await foto('bildschirm-original'); await flaechen('Originalgroesse');
+    // Lokaler Zoom 200 %: Ein Klick mitten in der Flaeche wirkt an der Stelle des Bilds, die dort zu sehen ist
+    await ev('App.aktiv.ansichtSetzen("zoom", 2)'); await warte(900);
+    c = await leinwand();
+    if (Math.abs(c.w - 2 * c.cw) > 1) probleme.push('Bildschirm: Zoom 200 % ' + JSON.stringify(c));
+    [fx, fy] = await ev(`(() => { const c = App.aktiv.leinwand(), r = c.getBoundingClientRect(), f = App.aktiv.flaeche.getBoundingClientRect(); const s = r.width / c.width;
+      return [Math.round((f.left + f.width * ${(0.3 + 0.4 * zufall).toFixed(3)} - r.left) / s), Math.round((f.top + f.height * 0.55 - r.top) / s)]; })()`);
+    vorher = await ausschnitt(fx, fy);
+    await klickAuf(fx, fy);
+    if ((await ausschnitt(fx, fy)) === vorher) probleme.push('Bildschirm: Klick bei Zoom 200 % wirkt nicht an der Stelle ' + fx + ',' + fy);
+    await foto('bildschirm-zoom-200'); await flaechen('Zoom 200 %'); await deutsch('Zoom 200 %');
     await ev('App.aktiv.ansichtSetzen("fern")'); await warte(2500);
     c = await leinwand();
     const f = await ev('(() => { const r = App.aktiv.flaeche.getBoundingClientRect(); return [Math.floor(r.width), Math.floor(r.height)]; })()');
@@ -382,6 +395,17 @@ function chromePfad() {
       await klickT('vnc.mehr', 'App.aktiv.unten'); await warte(300);
       await foto('bildschirm-mehr'); await flaechen('Mehr-Menue (Bildschirm)'); await deutsch('Mehr-Menue (Bildschirm)');
       await ev('menue.offen && menue.offen()');
+      // Tastenreihe: Feststeller Strg, Funktionstasten-Menue
+      await klickT('vnc.tasten.kurz', 'App.aktiv.unten'); await warte(300);
+      if (!(await ev('App.aktiv.tastenZeile.getClientRects().length > 0'))) probleme.push('Bildschirm: Tastenreihe erscheint nicht');
+      await foto('bildschirm-tastenreihe'); await flaechen('Tastenreihe'); await deutsch('Tastenreihe');
+      await ev('App.aktiv.tastenZeile.querySelector("[data-mod=ctrl]").click()');
+      if (!(await ev('App.aktiv.mods.ctrl'))) probleme.push('Bildschirm: Strg der Tastenreihe rastet nicht ein');
+      await ev('App.aktiv.funktionsMenue(App.aktiv.tastenZeile.querySelector("[aria-haspopup=menu]"))'); await warte(300);
+      await foto('bildschirm-funktionstasten'); await flaechen('Funktionstasten'); await deutsch('Funktionstasten');
+      await ev('[...document.querySelectorAll(".menue button")].find((b) => b.textContent.trim() === "F5").click()'); await warte(300);
+      if (await ev('App.aktiv.mods.ctrl')) probleme.push('Bildschirm: Strg bleibt nach einer Taste eingerastet');
+      await klickT('vnc.tasten.kurz', 'App.aktiv.unten'); await warte(200);
     }
     if (!MOBIL) console.log('Statusleiste (Bildschirm):', await ev('document.querySelector(".statusleiste").innerText.replace(/\\n/g, " | ")'));
     // Trennen: Zustandskarte mit «Neu verbinden», Vorschaubild gespeichert und auf der Startseite

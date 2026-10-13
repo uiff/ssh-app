@@ -1,9 +1,15 @@
 /* Bildschirm-Tab (VNC): Werkzeugleiste oben (Desktop) bzw. einklappbar unten (Telefon), Bildflaeche
-   mit noVNC, Vollbild, Vorschaubilder auf der Startseite. Farben ueber die Variablen aus app.css. */
+   mit noVNC, Tastenreihe (Touch), Vollbild, Vorschaubilder auf der Startseite. Farben ueber die
+   Variablen aus app.css. */
 
 .vnc-wrap { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--term); container-type: inline-size; container-name: vnc; }
 .vnc-flaeche { flex: 1; position: relative; min-height: 0; overflow: hidden; background: var(--term) center / contain no-repeat; }
-.vnc-ziel { position: absolute; inset: 0; }
+/* Rahmen um die Buehne (Ziel von noVNC): Beim lokalen Zoom ist die Buehne groesser und der Rahmen
+   verschiebbar — mit Rollbalken (Maus) bzw. per Ziehen mit einem Finger (Touch, vnc.js). Kleiner
+   als die Flaeche: mittig. */
+.vnc-ziel { position: absolute; inset: 0; display: flex; overflow: auto; scrollbar-width: thin; scrollbar-color: var(--linie2) transparent; }
+.vnc-wrap.touch .vnc-ziel { overflow: hidden; }
+.vnc-buehne { flex: none; margin: auto; width: 100%; height: 100%; }
 /* Nach dem Trennen: das letzte Bild abgedunkelt, darueber die Zustandskarte */
 .vnc-flaeche.mit-bild::before { content: ''; position: absolute; inset: 0; background: rgba(11, 13, 16, .72); }
 .vnc-flaeche.mit-bild .vnc-ziel { display: none; }
@@ -25,15 +31,62 @@
 @media (pointer: coarse) { .vnc-leiste { height: 52px; } .vnc-k { height: 44px; min-width: 44px; } .vnc-segment .vnc-k { height: 44px; } }
 /* Neuer Text vom Geraet in der Zwischenablage */
 .vnc-punkt { position: absolute; top: 5px; right: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--akzent); box-shadow: 0 0 0 2px #12151B; }
-/* Weniger Breite (Seitenleisten offen): zuerst verlieren die nicht gewaehlten Ansichten ihren Text,
-   dann alle Knoepfe ausser gewaehlten (Ansicht, Nur ansehen); ganz schmal faellt Strg+Alt+Entf weg
-   (bleibt unter Sondertasten). Der Text steht immer noch als Tooltip und aria-label da. */
+/* Weniger Breite (Seitenleisten, Tablet): zuerst verlieren die nicht gewaehlten Ansichten ihren
+   Text, dann alle Knoepfe ausser der gewaehlten Ansicht («Nur ansehen» zeigt die Plakette im Bild),
+   dann faellt Strg+Alt+Entf weg (bleibt unter Sondertasten). Die Zoomstufe in Prozent bleibt. Name
+   und Tooltip (aria-label, title) bleiben immer. */
+/* Zoom: − und + nur als Symbol (Name als Tooltip), dazwischen die Stufe in Prozent (bleibt immer). */
+.vnc-k.symbol .l { display: none; }
+.vnc-k.symbol { padding: 0 8px; }
+.vnc-k.prozent { min-width: 58px; padding: 0 8px; font-family: var(--mono); font-size: 12.5px; }
 @container vnc (max-width: 1320px) { .vnc-segment .vnc-k[aria-pressed=false] .l { display: none; } .vnc-segment .vnc-k[aria-pressed=false] { padding: 0 8px; } }
-@container vnc (max-width: 1080px) { .vnc-leiste .vnc-k:not(.text):not([aria-pressed=true]) .l { display: none; } .vnc-leiste .vnc-k:not(.text):not([aria-pressed=true]) { padding: 0 8px; } }
-@container vnc (max-width: 680px) { .vnc-leiste .vnc-k.text { display: none; } .vnc-leiste .vnc-k .l { display: none; } .vnc-leiste .vnc-k { padding: 0 8px; } }
+@container vnc (max-width: 1080px) { .vnc-leiste > .vnc-k:not(.text) .l { display: none; } .vnc-leiste > .vnc-k:not(.text) { padding: 0 8px; } }
+@container vnc (max-width: 960px) { .vnc-leiste .vnc-k.text { display: none; } }
+@container vnc (max-width: 680px) { .vnc-leiste .vnc-k .l { display: none; } .vnc-leiste .vnc-k { padding: 0 8px; } }
 
-/* Nur ansehen: Mauszeiger zeigt, dass Klicks nichts tun */
+/* Nur ansehen: Mauszeiger zeigt, dass Klicks nichts tun; die Plakette im Bild sagt es (Antippen
+   schaltet es aus). */
 .vnc-wrap.nur-ansehen .vnc-ziel canvas { cursor: default !important; }
+.vnc-plakette { position: absolute; top: 10px; left: 50%; transform: translateX(-50%); z-index: 5; display: inline-flex; align-items: center; gap: 7px; height: 34px; padding: 0 12px; border-radius: 17px; background: rgba(42, 34, 18, .92); border: 1px solid var(--warn-rand); color: var(--warn-text); font-size: 13px; font-weight: 600; white-space: nowrap; box-shadow: 0 6px 20px rgba(0,0,0,.4); }
+.vnc-plakette svg.ic:last-child { opacity: .7; }
+.vnc-plakette:hover { background: rgba(58, 46, 22, .96); }
+@media (pointer: coarse), (max-width: 899px) { .vnc-plakette { height: 44px; border-radius: 22px; padding: 0 14px; } }
+/* Telefon: Meldungen erscheinen oben — die Plakette steht deshalb unten im Bild (nie verdeckt),
+   die Zoomstufe rueckt darueber. */
+@media (max-width: 899px) {
+  .vnc-plakette { top: auto; bottom: 10px; }
+  .vnc-wrap.nur-ansehen .vnc-zoom-pille { bottom: 64px; }
+}
+
+/* Telefon, vergroessert: Zoomstufe mit − und + (am Desktop in der Leiste) */
+.vnc-zoom-pille { display: none; }
+@media (max-width: 899px) {
+  .vnc-zoom-pille { position: absolute; left: calc(10px + env(safe-area-inset-left, 0px)); bottom: 10px; z-index: 5; display: flex; align-items: center; border-radius: 22px; background: rgba(28, 33, 42, .88); border: 1px solid var(--linie2); box-shadow: 0 6px 20px rgba(0,0,0,.45); }
+  .vnc-zoom-pille button { width: 44px; height: 44px; display: inline-flex; align-items: center; justify-content: center; color: var(--text); border-radius: 22px; }
+  .vnc-zoom-pille button.p { width: auto; min-width: 60px; padding: 0 6px; font-family: var(--mono); font-size: 13px; }
+  .vnc-zoom-pille button:disabled { opacity: .35; }
+  .vnc-zoom-pille button:active { background: var(--wahl); }
+}
+
+/* ---------- Tastenreihe (Touch): Esc, Tab, Feststeller, Pfeile, Pos1 … ---------- */
+.vnc-tastenzeile { display: none; flex: none; gap: 6px; padding: 6px; background: var(--flaeche); border-top: 1px solid var(--linie); overflow-x: auto; scrollbar-width: none; touch-action: pan-x; }
+.vnc-tastenzeile::-webkit-scrollbar { display: none; }
+.vnc-wrap.touch.zeile-offen .vnc-tastenzeile { display: flex; }
+.vnc-tastenzeile button { min-width: 46px; height: 44px; padding: 0 10px; border-radius: 8px; background: var(--flaeche2); font-family: var(--mono); font-size: 14px; flex: none; color: var(--text); display: inline-flex; align-items: center; justify-content: center; white-space: nowrap; }
+.vnc-tastenzeile button:active { background: var(--wahl); }
+.vnc-tastenzeile button.an { background: var(--akzent); color: var(--akzent-text); }
+.vnc-tastenzeile button:disabled { opacity: .4; }
+.vnc-tastenzeile button.cad { font-size: 13px; }
+.vnc-tastenzeile .trenn { width: 1px; background: var(--linie); flex: none; margin: 4px 2px; }
+/* Menue der Funktionstasten: F1–F12 als Raster, darunter die uebrigen Tasten */
+.menue.vnc-f-menue { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 2px; }
+.menue.vnc-f-menue button { grid-column: 1 / -1; }
+.menue.vnc-f-menue button.f { grid-column: auto; justify-content: center; font-family: var(--mono); padding: 0 6px; }
+/* Telefon quer (breites Blatt): F1–F12 in zwei Reihen, die uebrigen Tasten zu zweit */
+@media (max-width: 899px) and (min-width: 600px) {
+  .menue.vnc-f-menue { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .menue.vnc-f-menue button:not(.f) { grid-column: span 3; }
+}
 
 /* ---------- Telefon: einklappbare Leiste unten ---------- */
 .vnc-unten, .vnc-griff { display: none; }
@@ -50,6 +103,18 @@
   .vnc-wrap.leiste-zu .vnc-unten { display: none; }
   .vnc-wrap.leiste-zu .vnc-griff { display: inline-flex; }
   .vnc-griff { position: absolute; right: calc(10px + env(safe-area-inset-right, 0px)); bottom: calc(10px + var(--unten)); z-index: 6; width: 44px; height: 44px; border-radius: 22px; align-items: center; justify-content: center; background: rgba(28, 33, 42, .88); border: 1px solid var(--linie2); color: var(--text); box-shadow: 0 6px 20px rgba(0,0,0,.45); }
+  /* Unten ist die Leiste: Tastenreihe ohne eigenen Abstand zum Home-Balken */
+  .vnc-wrap.leiste-zu .vnc-tastenzeile { padding-bottom: calc(6px + var(--unten)); }
+}
+/* Telefon quer: Die Leiste steht senkrecht am rechten Rand, das Bild bekommt die ganze Hoehe
+   (ausser der Tastenreihe, wenn sie offen ist). */
+@media (max-width: 899px) and (orientation: landscape) and (max-height: 520px) {
+  .vnc-wrap { display: grid; grid-template-columns: minmax(0, 1fr) auto; grid-template-rows: minmax(0, 1fr) auto; }
+  .vnc-flaeche { grid-column: 1; grid-row: 1; }
+  .vnc-tastenzeile { grid-column: 1; grid-row: 2; padding-bottom: calc(6px + var(--unten)); }
+  .vnc-unten { grid-column: 2; grid-row: 1 / span 2; flex-direction: column; overflow-x: hidden; overflow-y: auto; touch-action: pan-y; padding: 4px calc(4px + env(safe-area-inset-right, 0px)) calc(4px + var(--unten)) 4px; border-top: 0; border-left: 1px solid var(--linie); }
+  .vnc-t { flex: 0 0 auto; min-width: 64px; min-height: 48px; gap: 2px; font-size: 10.5px; padding: 3px 4px; }
+  .vnc-t .vnc-punkt { right: calc(50% - 14px); }
 }
 
 /* Touch-Geraete: noVNC zeichnet den Mauszeiger des Geraets als eigene Leinwand direkt im body

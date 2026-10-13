@@ -6,7 +6,7 @@ func init() {
 	Eintragen(map[string]string{
 		// Host-Felder
 		"vnc.port": "VNC-Port muss zwischen 1 und 65535 liegen",
-		"vnc.weg":  "Unbekannter VNC-Weg «%s» (erlaubt: ssh, direkt)",
+		"vnc.weg":  "Unbekannte VNC-Verbindung «%s» (erlaubt: ssh, direkt)",
 
 		// Aufbau
 		"vnc.aus":            "VNC ist für «%s» nicht eingeschaltet — im Host-Dialog einschalten",
@@ -15,7 +15,7 @@ func init() {
 		"vnc.abgebrochen":    "VNC-Verbindungsaufbau abgebrochen",
 
 		// Tunnel ueber SSH
-		"vnc.tunnel.verboten":       "Der SSH-Server von %s erlaubt keine Weiterleitung (AllowTcpForwarding) — im Host den VNC-Weg «direkt» wählen oder die Weiterleitung freigeben",
+		"vnc.tunnel.verboten":       "Der SSH-Server von %s erlaubt keine Weiterleitung (AllowTcpForwarding) — im Host-Dialog unter «Verbindung» «Direkt» wählen oder die Weiterleitung freigeben",
 		"vnc.tunnel.kein.dienst":    "Auf %s antwortet kein VNC-Server auf Port %d (lokal über SSH geprüft)",
 		"vnc.tunnel.fehlgeschlagen": "Der VNC-Tunnel über SSH zu %s liess sich nicht öffnen",
 
@@ -48,8 +48,13 @@ func init() {
 		"vnc.browser.keine.antwort": "Der VNC-Viewer im Browser antwortet nicht",
 		"vnc.durchreichen.version":  "Der VNC-Viewer im Browser hat eine andere VNC-Version gewählt — bitte neu verbinden",
 
+		// Schluessel des VNC-Servers (Durchreichen mit RA2)
+		"vnc.schluessel.ungueltig": "Typ und Fingerabdruck des VNC-Schlüssels fehlen oder sind ungültig",
+		"vnc.schluessel.geaendert": "Der Schlüssel des VNC-Servers von «%s» hat sich geändert — nur ersetzen, wenn der Fingerabdruck am Gerät stimmt",
+
 		// Ende
 		"vnc.ende.server": "Der VNC-Server hat die Verbindung beendet",
+		"vnc.ende.haengt": "Der VNC-Server nimmt keine Daten mehr an — Verbindung getrennt",
 	}, map[string]string{
 		// Host fields
 		"vnc.port": "VNC port must be between 1 and 65535",
@@ -62,7 +67,7 @@ func init() {
 		"vnc.abgebrochen":    "VNC connection canceled",
 
 		// Tunnel over SSH
-		"vnc.tunnel.verboten":       "The SSH server on %s doesn’t allow forwarding (AllowTcpForwarding) — choose the VNC connection type “direct” for the host or allow forwarding",
+		"vnc.tunnel.verboten":       "The SSH server on %s doesn’t allow forwarding (AllowTcpForwarding) — choose “Direct” under “Connection” in the host dialog or allow forwarding",
 		"vnc.tunnel.kein.dienst":    "No VNC server is responding on %s, port %d (checked locally over SSH)",
 		"vnc.tunnel.fehlgeschlagen": "Couldn’t open the VNC tunnel over SSH to %s",
 
@@ -95,7 +100,12 @@ func init() {
 		"vnc.browser.keine.antwort": "The VNC viewer in the browser isn’t responding",
 		"vnc.durchreichen.version":  "The VNC viewer in the browser chose a different VNC version — please reconnect",
 
+		// VNC server key (pass-through with RA2)
+		"vnc.schluessel.ungueltig": "The VNC key’s type and fingerprint are missing or invalid",
+		"vnc.schluessel.geaendert": "The VNC server key for “%s” has changed — replace it only if the fingerprint matches the one on the device",
+
 		// End
 		"vnc.ende.server": "The VNC server closed the connection",
+		"vnc.ende.haengt": "The VNC server stopped accepting data — disconnected",
 	})
 }

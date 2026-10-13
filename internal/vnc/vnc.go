@@ -24,6 +24,7 @@ import (
 	"syscall"
 	"time"
 	"unicode"
+	"unicode/utf16"
 
 	"github.com/uiff/ssh-app/internal/texte"
 )
@@ -291,14 +292,24 @@ func (a *anmeldung) schreiben(b []byte) error {
 	return nil
 }
 
-// DESAntwort verschluesselt die Challenge der VNC-Authentication: Schluessel sind die
-// ersten 8 Bytes des Passworts (mit Nullen aufgefuellt), jedes Byte bitgespiegelt.
+// DESAntwort verschluesselt die Challenge der VNC-Authentication. Der Schluessel entsteht
+// wie bei noVNC (RFB.genDES, charCodeAt): die ersten 8 UTF-16-Einheiten des Passworts, von
+// jeder nur das untere Byte (bis U+00FF also Latin-1, «ü» = 0xFC; nicht UTF-8), mit Nullen
+// aufgefuellt, jedes Byte bitgespiegelt. So gilt ein Passwort mit Umlauten bei Keyway
+// gleich wie beim Viewer im Browser und bei Servern, die Latin-1 erwarten.
 func DESAntwort(passwort string, challenge []byte) []byte {
-	schluessel := make([]byte, 8)
-	copy(schluessel, passwort)
-	for i, b := range schluessel {
-		schluessel[i] = bits.Reverse8(b)
+	schluessel := make([]byte, 0, 8)
+	for _, r := range passwort {
+		for _, u := range utf16.AppendRune(nil, r) {
+			if len(schluessel) < 8 {
+				schluessel = append(schluessel, bits.Reverse8(byte(u)))
+			}
+		}
+		if len(schluessel) == 8 {
+			break
+		}
 	}
+	schluessel = append(schluessel, make([]byte, 8-len(schluessel))...)
 	c, _ := des.NewCipher(schluessel) // 8 Bytes: kein Fehler moeglich
 	aus := make([]byte, len(challenge))
 	for i := 0; i+8 <= len(challenge); i += 8 {

@@ -377,6 +377,21 @@ code.inline { font-size: .92em; padding: 0 4px; border-radius: 4px; background: 
   .fuss a, .quelle a, .einstellungen-gruppe a:not(.btn), .start p a { display: inline-block; padding: 14px 4px; margin: -14px -4px; }
 }
 
+/* Tablet (Touch, Desktop-Ansicht): Suche, Tabs und ihre Knoepfe ebenfalls mindestens 44 px */
+@media (min-width: 900px) and (pointer: coarse) {
+  :root { --leiste: 46px; } /* alle Leisten gleich hoch, Platz fuer 44 px hohe Tabs samt Rand */
+  .kopf .suche { height: 44px; }
+  .tab { height: 45px; }
+  .tab .zu { width: 44px; height: 44px; }
+  .tabs .tab-neu { width: 44px; height: 44px; margin-bottom: 0; }
+}
+
+/* Telefon quer mit einem Bildschirm (VNC) vorn: schmalerer Kopf, mehr Hoehe fuer das Bild
+   (vnc.css legt dazu die Leiste an den rechten Rand). */
+@media (max-width: 899px) and (orientation: landscape) and (max-height: 520px) {
+  html.vnc-vorn { --kopf: 46px; }
+}
+
 /* Wenig Hoehe (Querformat, Bildschirmtastatur): Kopf und Fuss der Dialoge scrollen mit,
    sonst bleibt zwischen ihnen kein Platz fuer das Eingabefeld. */
 @media (max-height: 520px) {

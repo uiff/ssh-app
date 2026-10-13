@@ -56,6 +56,10 @@ const (
 	VncPortVorgabe = 5900
 	VncWegSSH      = "ssh"
 	VncWegDirekt   = "direkt"
+	// BekanntVncPraefix: Ziele in «bekannt», die den Schluessel eines VNC-Servers halten
+	// (Durchreich-Modus mit RA2): "vnc:<adresse>:<port>". SSH-Ziele (host:port, IPv6 in
+	// Klammern) beginnen nie so.
+	BekanntVncPraefix = "vnc:"
 )
 
 // vncVorgaben fuellt leere VNC-Felder (aeltere Daten, Backups).
@@ -85,10 +89,12 @@ type Zugang struct {
 	PassphraseEnc []byte `json:"-"`
 }
 
+// BekannterHost ist ein bestaetigter Server-Schluessel (Trust on First Use): SSH-Host-
+// Schluessel unter host:port, Schluessel von VNC-Servern unter BekanntVncPraefix.
 type BekannterHost struct {
-	Ziel        string    `json:"ziel"` // host:port
+	Ziel        string    `json:"ziel"` // host:port oder vnc:host:port
 	Typ         string    `json:"typ"`
-	Schluessel  string    `json:"schluessel"` // base64 wire format
+	Schluessel  string    `json:"schluessel"` // SSH: base64 wire format; VNC: wie Fingerprint
 	Fingerprint string    `json:"fingerprint"`
 	Seit        time.Time `json:"seit"`
 }

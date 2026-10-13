@@ -26,6 +26,15 @@ func TestDESWieNoVNC(t *testing.T) {
 		"12345678":       "540ca97c45e6497120f21665e21b19cf",
 		"langesPasswort": "8b9bd60b5ceaf883f2fae1cffc9eb455",
 		"":               "562c25d76cc998b0abdb8424a0195286",
+		"Geh31m-VNC":     "b0d376130accb37e1602108dec3df4c6",
+		// Nicht-ASCII: noVNC nimmt je UTF-16-Einheit das untere Byte (charCodeAt & 0xFF),
+		// nicht UTF-8. Werte aus web/static/vendor/novnc/core/crypto/des.js (RFB.genDES).
+		"Grüezi€1": "f1391a7448244701a9640b6492076689",
+		"äöü":      "37f4b8975c51e80df1346c632876ecc1",
+		"Straße":   "5546372341d383a5f003ae8c9262a127",
+		"€uro":     "b63bf39a638407c1ce059ed1368c9400",
+		"pw😀x":     "8d454aadfa3c7cc25f48b82df17e26cf", // ausserhalb der BMP: zwei Einheiten
+		"Ā":        "562c25d76cc998b0abdb8424a0195286", // U+0100: unteres Byte 0 wie leer
 	} {
 		if got := hex.EncodeToString(vnc.DESAntwort(pw, ch)); got != will {
 			t.Errorf("%q: %s, noVNC: %s", pw, got, will)
@@ -33,6 +42,9 @@ func TestDESWieNoVNC(t *testing.T) {
 	}
 	if !bytes.Equal(vnc.DESAntwort("langesPa", ch), vnc.DESAntwort("langesPasswort", ch)) {
 		t.Error("nur die ersten 8 Zeichen zählen")
+	}
+	if !bytes.Equal(vnc.DESAntwort("Grüezi€1", ch), vnc.DESAntwort("Grüezi€1 und mehr", ch)) {
+		t.Error("nur die ersten 8 Zeichen zählen (auch mit Umlauten)")
 	}
 }
 
@@ -316,8 +328,9 @@ func TestFehlerVerstaendlich(t *testing.T) {
 	}
 }
 
-// Bedienung erkennen: Tasten, Zeiger, Zwischenablage, Bildschirmgroesse zaehlen;
-// Bildanforderungen, Kodierungen, Pixelformat und Fences nicht.
+// Bedienung erkennen: Tasten, Zeiger, Bildschirmgroesse zaehlen; Bildanforderungen,
+// Kodierungen, Pixelformat, Fences und die Zwischenablage nicht (noVNC beantwortet die
+// erweiterte Zwischenablage des Servers von selbst, auch bei «Nur ansehen»).
 func TestEingaben(t *testing.T) {
 	var e vnc.Eingaben
 	nicht := [][]byte{
@@ -327,6 +340,14 @@ func TestEingaben(t *testing.T) {
 		{3, 1, 0, 0, 0, 0, 4, 0, 3, 0},                   // FramebufferUpdateRequest
 		{248, 0, 0, 0, 0, 0, 0, 0, 2, 'a', 'b'},          // Fence mit 2 Bytes
 		{150, 1, 0, 0, 0, 0, 0, 10, 0, 10},               // EnableContinuousUpdates
+		{6, 0, 0, 0, 0, 0, 0, 3, 'a', 'b', 'c'},          // ClientCutText (klassisch)
+		// Automatische Antworten von noVNC 1.7 (core/rfb.js) auf die erweiterte
+		// Zwischenablage des Servers: Caps (Laenge -8 mit Formaten und Groesse), Request
+		// auf Notify, Notify auf Peek, Provide auf Request.
+		{6, 0, 0, 0, 0xff, 0xff, 0xff, 0xf8, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x10, 0x00}, // Caps
+		{6, 0, 0, 0, 0xff, 0xff, 0xff, 0xfc, 0x02, 0x00, 0x00, 0x01},                         // Request
+		{6, 0, 0, 0, 0xff, 0xff, 0xff, 0xfc, 0x08, 0x00, 0x00, 0x01},                         // Notify
+		{6, 0, 0, 0, 0xff, 0xff, 0xff, 0xf9, 0x10, 0x00, 0x00, 0x01, 0x78, 0x9c, 0x03},       // Provide (zlib)
 	}
 	for i, b := range nicht {
 		if e.Pruefen(b) {
@@ -334,13 +355,12 @@ func TestEingaben(t *testing.T) {
 		}
 	}
 	ja := [][]byte{
-		{5, 1, 0, 10, 0, 20},                                          // Zeiger
-		{5, 0x81, 0, 10, 0, 20, 0},                                    // erweiterter Zeiger
-		{4, 1, 0, 0, 0, 0, 0, 0x61},                                   // Taste
-		{6, 0, 0, 0, 0, 0, 0, 3, 'a', 'b', 'c'},                       // Zwischenablage
-		{6, 0, 0, 0, 0xff, 0xff, 0xff, 0xfe, 1, 2},                    // erweiterte Zwischenablage (-2)
+		{5, 1, 0, 10, 0, 20},        // Zeiger
+		{5, 0x81, 0, 10, 0, 20, 0},  // erweiterter Zeiger
+		{4, 1, 0, 0, 0, 0, 0, 0x61}, // Taste
 		append([]byte{251, 0, 3, 0, 2, 0, 1, 0}, make([]byte, 16)...), // SetDesktopSize
 		{255, 0, 0, 1, 0, 0, 0, 0x61, 0, 0, 0, 30},                    // QEMU-Taste
+		{250, 0, 1, 2}, // XVP (Neustart …)
 	}
 	for i, b := range ja {
 		if !e.Pruefen(b) {
@@ -359,9 +379,18 @@ func TestEingaben(t *testing.T) {
 	if f.Pruefen([]byte{3, 1, 0, 0, 0, 0, 0, 1, 0, 1}) {
 		t.Fatal("nach dem Zeiger aus dem Takt")
 	}
-	// Unbekannte Nachricht: ab dann zaehlt alles.
+	// Nach der Zwischenablage im Takt: der Zeiger dahinter zaehlt.
+	var z vnc.Eingaben
+	if !z.Pruefen([]byte{1, 6, 0, 0, 0, 0, 0, 0, 2, 'h', 'i', 5, 0, 0, 1, 0, 1}) {
+		t.Fatal("Zeiger nach der Zwischenablage zählt nicht")
+	}
+	// Unbekannte Nachricht: der Strom ist nicht mehr lesbar, ab dann zaehlt nichts mehr
+	// (wie beim Durchreichen; Bedienung meldet der Browser dann mit «bedient»).
 	var g vnc.Eingaben
-	if !g.Pruefen([]byte{1, 77}) || !g.Pruefen([]byte{3, 1, 0, 0, 0, 0, 0, 1, 0, 1}) {
-		t.Fatal("nach unbekannter Nachricht muss alles zählen")
+	if g.Pruefen([]byte{1, 77}) || g.Pruefen([]byte{3, 1, 0, 0, 0, 0, 0, 1, 0, 1}) || g.Pruefen([]byte{4, 1, 0, 0, 0, 0, 0, 0x61}) {
+		t.Fatal("nach unbekannter Nachricht darf nichts mehr zählen")
+	}
+	if !g.Unlesbar() {
+		t.Fatal("Unlesbar nach unbekannter Nachricht")
 	}
 }

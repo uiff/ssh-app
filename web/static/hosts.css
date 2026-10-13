@@ -120,7 +120,8 @@
 /* ---------- Host-Dialog ---------- */
 .host-form { display: flex; flex-direction: column; gap: 18px; }
 .host-form .meldung { overflow-wrap: anywhere; }
-.host-form input[aria-invalid=true] { border-color: var(--fehler); }
+/* Feldfehler in allen Dialogen (Host, Schluessel erzeugen, Einstellungen): roter Rand */
+.dialog :is(input, textarea, select)[aria-invalid=true] { border-color: var(--fehler); }
 .host-form .feld .hinweis.fehler { color: var(--fehler); }
 /* Rasterzellen nicht ueber ihren Inhalt aufweiten (320 px: langer Zugangs- oder Ordnername
    schob sonst alle Felder rechts aus dem Bild). */

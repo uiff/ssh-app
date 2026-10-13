@@ -8,6 +8,13 @@ function feldMit(id, label, input, hinweis) {
 function textFeld(id, wert, extra) {
   return el('input', Object.assign({ id, type: 'text', value: wert || '', autocomplete: 'off', autocapitalize: 'off', spellcheck: 'false' }, extra || {}));
 }
+// Feldfehler (Text als Toast): Feld rot markieren, in die Mitte holen und fokussieren.
+// Tippen ins Feld nimmt die Markierung wieder weg (oninput am Feld).
+function feldMarkieren(input) {
+  input.setAttribute('aria-invalid', 'true');
+  input.scrollIntoView({ block: 'center', behavior: window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  input.focus({ preventScroll: true });
+}
 
 App.zugangBearbeiten = function (z) {
   const neu = !z.id;
@@ -75,10 +82,10 @@ App.zugangBearbeiten = function (z) {
 };
 
 App.schluesselErzeugen = function () {
-  const name = textFeld('k-name', '', { placeholder: t('hosts.schluessel.namePlatzhalter') });
+  const name = textFeld('k-name', '', { placeholder: t('hosts.schluessel.namePlatzhalter'), oninput: () => name.removeAttribute('aria-invalid') });
   const benutzer = textFeld('k-benutzer', '', { placeholder: t('hosts.feld.benutzerBeispiele') });
   const los = async () => {
-    if (!name.value.trim()) { toast(t('hosts.schluessel.nameFehlt'), 'fehler'); return; }
+    if (!name.value.trim()) { toast(t('hosts.schluessel.nameFehlt'), 'fehler'); feldMarkieren(name); return; }
     try {
       const z = await api('POST', '/api/zugaenge/erzeugen', { name: name.value.trim(), benutzer: benutzer.value.trim() });
       dlg.zu(); await App.datenLaden();
@@ -169,7 +176,7 @@ App.einstellungen = function () {
   const st = App.status;
   const alt = el('input', { id: 'e-alt', type: 'password', autocomplete: 'current-password' });
   const neu1 = el('input', { id: 'e-neu', type: 'password', autocomplete: 'new-password' });
-  const neu2 = el('input', { id: 'e-neu2', type: 'password', autocomplete: 'new-password' });
+  const neu2 = el('input', { id: 'e-neu2', type: 'password', autocomplete: 'new-password', oninput: () => neu2.removeAttribute('aria-invalid') });
   const schrift = el('input', { id: 'e-schrift', type: 'number', min: 9, max: 24, value: App.schriftGroesse(), inputmode: 'numeric',
     onchange: () => App.schriftSetzen(parseInt(schrift.value, 10)) });
   // Sprache: Wechsel laedt die Seite neu; offene Terminals haengen sich danach von selbst wieder an.
@@ -205,13 +212,24 @@ App.einstellungen = function () {
     vsLoeschen.disabled = !b.n;
   };
   vsZeichnen();
+  // Bekannte Schluessel: SSH-Hosts («adresse:port») und VNC-Server beim Durchreichen (RA2,
+  // «vnc:adresse:port»). Das Praefix steht nicht roh da: Symbol und «Bildschirm (VNC)».
   const bekannt = el('div', { style: { display: 'flex', flexDirection: 'column' } });
-  const bekanntZeichnen = () => ersetzen(bekannt, ...(App.daten.bekannt.length ? App.daten.bekannt.map((b) => el('div', { class: 'zeile-wrap', style: { borderBottom: '1px solid var(--linie)' } },
-    el('div', { class: 'zeile', style: { cursor: 'default' } }, el('span', { class: 'haupt' }, el('b', { class: 'mono', style: { fontSize: '13px' } }, b.ziel), el('small', null, b.typ + ' · ' + b.fingerprint))),
-    ikonKnopf('muell', t('hosts.einst.vergessenLabel', { ziel: b.ziel }), async () => {
-      if (!(await frage(t('hosts.einst.vergessenFrage', { ziel: b.ziel }), { ja: t('hosts.einst.vergessen'), gefahr: true }))) return;
-      try { await api('DELETE', '/api/bekannt/' + encodeURIComponent(b.ziel)); await App.datenLaden(); bekanntZeichnen(); } catch (e) { fehlerToast(e); }
-    }))) : [el('p', { style: { margin: 0, color: 'var(--leise)' } }, t('hosts.einst.keine'))]));
+  const bekanntZeile = (b) => {
+    const vnc = b.ziel.startsWith('vnc:');
+    const ziel = vnc ? b.ziel.slice(4) : b.ziel;
+    return el('div', { class: 'zeile-wrap', style: { borderBottom: '1px solid var(--linie)' } },
+      el('div', { class: 'zeile', style: { cursor: 'default' } },
+        icon(vnc ? 'bildschirm' : 'terminal', 18),
+        el('span', { class: 'haupt' }, el('b', { class: 'mono', style: { fontSize: '13px' } }, ziel),
+          el('small', null, (vnc ? t('hosts.einst.bekanntVnc') + ' · ' : '') + b.typ + ' · ' + b.fingerprint))),
+      ikonKnopf('muell', t(vnc ? 'hosts.einst.vncVergessenLabel' : 'hosts.einst.vergessenLabel', { ziel }), async () => {
+        if (!(await frage(t(vnc ? 'hosts.einst.vncVergessenFrage' : 'hosts.einst.vergessenFrage', { ziel }), { ja: t('hosts.einst.vergessen'), gefahr: true }))) return;
+        try { await api('DELETE', '/api/bekannt/' + encodeURIComponent(b.ziel)); await App.datenLaden(); bekanntZeichnen(); } catch (e) { fehlerToast(e); }
+      }));
+  };
+  const bekanntZeichnen = () => ersetzen(bekannt, ...(App.daten.bekannt.length ? App.daten.bekannt.map(bekanntZeile)
+    : [el('p', { style: { margin: 0, color: 'var(--leise)' } }, t('hosts.einst.keine'))]));
   bekanntZeichnen();
 
   dialog({
@@ -242,7 +260,7 @@ App.einstellungen = function () {
         el('p', null, tTeile('hosts.einst.angemeldetAls', { benutzer: el('b', null, st.benutzer || '') })),
         el('div', { class: 'raster2' }, feldMit('e-alt', t('hosts.einst.pwAlt'), alt), el('div', { class: 'nur-desktop' }), feldMit('e-neu', t('hosts.einst.pwNeu'), neu1, t('hosts.einst.pwMin', { n: st.minPasswort })), feldMit('e-neu2', t('hosts.einst.pwNeu2'), neu2)),
         el('div', null, el('button', { class: 'btn', type: 'button', onclick: async () => {
-          if (neu1.value !== neu2.value) { toast(t('hosts.einst.pwUngleich'), 'fehler'); return; }
+          if (neu1.value !== neu2.value) { toast(t('hosts.einst.pwUngleich'), 'fehler'); feldMarkieren(neu2); return; }
           try { await api('POST', '/api/passwort', { alt: alt.value, neu: neu1.value }); alt.value = neu1.value = neu2.value = ''; toast(t('hosts.einst.pwGeaendert')); } catch (e) { fehlerToast(e); }
         } }, t('hosts.einst.pwAendern')))),
       el('div', { class: 'einstellungen-gruppe' },

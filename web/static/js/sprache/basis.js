@@ -13,6 +13,9 @@ i18nErgaenzen({
     'basis.fehlerStatus': 'Fehler {status}',
     'basis.sprache': 'Sprache',
     'basis.spracheWechseln': 'Sprache wechseln',
+    'basis.spracheFrage1': 'Die Seite lädt für die andere Sprache neu. Der Bildschirm «{titel}» wird dabei getrennt und lässt sich danach nicht wieder anhängen. Offene Terminals verbinden sich von selbst wieder.',
+    'basis.spracheFrage': 'Die Seite lädt für die andere Sprache neu. {n} Bildschirme werden dabei getrennt und lassen sich danach nicht wieder anhängen. Offene Terminals verbinden sich von selbst wieder.',
+    'basis.spracheJa': 'Trennen und wechseln',
   },
   en: {
     'basis.ok': 'OK',
@@ -25,5 +28,8 @@ i18nErgaenzen({
     'basis.fehlerStatus': 'Error {status}',
     'basis.sprache': 'Language',
     'basis.spracheWechseln': 'Switch language',
+    'basis.spracheFrage1': 'The page reloads to switch languages. The screen “{titel}” will be disconnected and can’t be reattached afterwards. Open terminals reconnect automatically.',
+    'basis.spracheFrage': 'The page reloads to switch languages. {n} screens will be disconnected and can’t be reattached afterwards. Open terminals reconnect automatically.',
+    'basis.spracheJa': 'Disconnect and switch',
   },
 });

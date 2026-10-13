@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http/httptest"
+	"net/url"
 	"runtime"
 	"slices"
 	"strings"
@@ -207,7 +208,7 @@ func TestVncHostFelder(t *testing.T) {
 	}{
 		{map[string]any{"vncPort": 70000}, "VNC-Port muss zwischen 1 und 65535 liegen", "VNC port must be between 1 and 65535"},
 		{map[string]any{"vncPort": -1}, "VNC-Port muss zwischen 1 und 65535 liegen", "VNC port must be between 1 and 65535"},
-		{map[string]any{"vncWeg": "telnet"}, "Unbekannter VNC-Weg «telnet» (erlaubt: ssh, direkt)", "Unknown VNC connection type “telnet” (allowed: ssh, direkt)"},
+		{map[string]any{"vncWeg": "telnet"}, "Unbekannte VNC-Verbindung «telnet» (erlaubt: ssh, direkt)", "Unknown VNC connection type “telnet” (allowed: ssh, direkt)"},
 	} {
 		f.felder["name"], f.felder["adresse"] = "hmi", "10.0.0.9"
 		rumpf, _ := json.Marshal(f.felder)
@@ -397,8 +398,8 @@ func TestVncSSHTunnel(t *testing.T) {
 		id     int64
 		de, en string
 	}{
-		{h2.ID, "Der SSH-Server von gesperrt erlaubt keine Weiterleitung (AllowTcpForwarding) — im Host den VNC-Weg «direkt» wählen oder die Weiterleitung freigeben",
-			"The SSH server on gesperrt doesn’t allow forwarding (AllowTcpForwarding) — choose the VNC connection type “direct” for the host or allow forwarding"},
+		{h2.ID, "Der SSH-Server von gesperrt erlaubt keine Weiterleitung (AllowTcpForwarding) — im Host-Dialog unter «Verbindung» «Direkt» wählen oder die Weiterleitung freigeben",
+			"The SSH server on gesperrt doesn’t allow forwarding (AllowTcpForwarding) — choose “Direct” under “Connection” in the host dialog or allow forwarding"},
 		{h3.ID, fmt.Sprintf("Auf ohne-vnc antwortet kein VNC-Server auf Port %d (lokal über SSH geprüft)", frei),
 			fmt.Sprintf("No VNC server is responding on ohne-vnc, port %d (checked locally over SSH)", frei)},
 	} {
@@ -561,19 +562,49 @@ func TestVncDurchreichen(t *testing.T) {
 	if x, _ := s.st.Host(h.ID); len(x.VncPasswortEnc) > 0 {
 		t.Fatal("Passwort beim Durchreichen gespeichert")
 	}
-	// Beim Durchreichen zaehlt jeder Block als Bedienung.
+	// Beim Durchreichen ist der Strom nicht lesbar: Binaerframes zaehlen nie als Bedienung,
+	// nur {t:"bedient"} der Seite bei echter Eingabe.
+	gelesen := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, l)
+		gelesen <- err
+	}()
 	bis := time.Now().Add(2500 * time.Millisecond)
 	for time.Now().Before(bis) {
 		b.BildAnfordern(true)
+		senden(t, ws, nachricht{T: "bedient"})
 		time.Sleep(250 * time.Millisecond)
 	}
 	var st struct{ Angemeldet bool }
 	if c.rufe("GET", "/api/status", nil, &st); !st.Angemeldet {
-		t.Fatal("Durchreichen verlängert die Anmeldung nicht")
+		t.Fatal("«bedient» verlängert die Anmeldung beim Durchreichen nicht")
 	}
-	ws.Close(websocket.StatusNormalClosure, "")
-	warteBis(t, 3*time.Second, "TCP zu", func() bool { return tv.Offen.Load() == 0 })
-	keineVncGoroutinen(t)
+	// Nur noch Bildanforderungen und Zwischenablage (laufender Viewer, niemand bedient):
+	// Leerlauf wie beim reinen Ansehen, die Anmeldung laeuft ab.
+	start := time.Now()
+	for {
+		select {
+		case err := <-gelesen:
+			if d := time.Since(start); d < 250*time.Millisecond { // Drosselung wie in TestVncLeerlauf
+				t.Fatalf("zu früh abgemeldet (%s): %v", d, err)
+			}
+			if l.schluss != wsAbgemeldet || !l.hatText("abgemeldet") {
+				t.Fatalf("Schluss %d, Texte %+v", l.schluss, l.texte)
+			}
+			if c.rufe("GET", "/api/status", nil, &st); st.Angemeldet {
+				t.Fatal("trotz Leerlauf noch angemeldet")
+			}
+			warteBis(t, 3*time.Second, "TCP zu", func() bool { return tv.Offen.Load() == 0 })
+			keineVncGoroutinen(t)
+			return
+		case <-time.After(250 * time.Millisecond):
+			b.BildAnfordern(true)
+			b.AblageSenden("automatisch")
+		}
+		if time.Since(start) > 5*time.Second {
+			t.Fatal("Binärframes verlängern die Anmeldung beim Durchreichen")
+		}
+	}
 }
 
 // --- V2: kein SSRF ---
@@ -635,7 +666,8 @@ func TestVncKeinFremdesZiel(t *testing.T) {
 	keineVncGoroutinen(t)
 }
 
-// --- V2: Leerlauf: Eingaben sind Bedienung, Bildanforderungen nicht ---
+// --- V2: Leerlauf: Eingaben und «bedient» sind Bedienung; Bildanforderungen und die
+// Zwischenablage (noVNC antwortet dort von selbst) nicht ---
 
 func TestVncLeerlauf(t *testing.T) {
 	tv := testVNC(t, testvnc.Optionen{})
@@ -652,7 +684,19 @@ func TestVncLeerlauf(t *testing.T) {
 		_, err := io.Copy(io.Discard, l)
 		gelesen <- err
 	}()
+	// Einfuegen meldet die Seite mit «bedient» (die Zwischenablage selbst zaehlt nicht).
 	bis := time.Now().Add(2500 * time.Millisecond)
+	for time.Now().Before(bis) {
+		senden(t, ws, nachricht{T: "bedient"})
+		b.AblageSenden("eingefügt")
+		time.Sleep(250 * time.Millisecond)
+	}
+	select {
+	case err := <-gelesen:
+		t.Fatalf("trotz «bedient» geschlossen: %v", err)
+	default:
+	}
+	bis = time.Now().Add(2500 * time.Millisecond)
 	for i := 0; time.Now().Before(bis); i++ {
 		b.Zeiger(0, 10+i, 10)
 		time.Sleep(250 * time.Millisecond)
@@ -662,12 +706,16 @@ func TestVncLeerlauf(t *testing.T) {
 		t.Fatalf("trotz Mausbewegung geschlossen: %v", err)
 	default:
 	}
-	// Nur noch Bildanforderungen (der Viewer laeuft, niemand bedient): Abmeldung.
+	// Nur noch Bildanforderungen und automatische Antworten der Zwischenablage (der Viewer
+	// laeuft, niemand bedient): Abmeldung.
+	caps := []byte{6, 0, 0, 0, 0xff, 0xff, 0xff, 0xf8, 0x01, 0x00, 0x00, 0x01, 0x00, 0x00, 0x10, 0x00}
 	start := time.Now()
 	for {
 		select {
 		case err := <-gelesen:
-			if d := time.Since(start); d < time.Second {
+			// bedient() vermerkt hoechstens einmal je Sekunde: die letzte Bedienung liegt
+			// bis 1,25 s zurueck, die Abmeldung kommt also fruehestens 0,25 s nach dem Wechsel.
+			if d := time.Since(start); d < 250*time.Millisecond {
 				t.Fatalf("zu früh abgemeldet (%s): %v %+v", d, err, l.texte)
 			}
 			if l.schluss != wsAbgemeldet || !l.hatText("abgemeldet") {
@@ -682,6 +730,8 @@ func TestVncLeerlauf(t *testing.T) {
 			return
 		case <-time.After(250 * time.Millisecond):
 			b.BildAnfordern(true)
+			l.Write(caps)
+			b.AblageSenden("automatisch")
 		}
 		if time.Since(start) > 5*time.Second {
 			t.Fatal("nach Leerlauf nicht geschlossen")
@@ -761,4 +811,409 @@ func TestVncLebenszeichen(t *testing.T) {
 	ws.Close(websocket.StatusNormalClosure, "")
 	warteBis(t, 3*time.Second, "TCP zum VNC-Server zu", func() bool { return tv.Offen.Load() == 0 })
 	keineVncGoroutinen(t)
+}
+
+// --- Blockierende Gegenueber: Fristen, Speichergrenze, Abbau ---
+
+// stummerVNC ist ein VNC-Server (RFB 3.8, Typ None), der nach ServerInit nichts mehr liest.
+// Mit fluten schickt er ununterbrochen Daten (wie Bildaktualisierungen).
+type stummerVNC struct {
+	l      net.Listener
+	fluten bool
+	conns  chan net.Conn
+}
+
+func stummerVNCStarten(t *testing.T, fluten bool) *stummerVNC {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sv := &stummerVNC{l: l, fluten: fluten, conns: make(chan net.Conn, 4)}
+	t.Cleanup(func() { l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			t.Cleanup(func() { c.Close() })
+			go sv.begruessen(c)
+		}
+	}()
+	return sv
+}
+
+func (sv *stummerVNC) port() int { return sv.l.Addr().(*net.TCPAddr).Port }
+
+func (sv *stummerVNC) begruessen(c net.Conn) {
+	lies := func(n int) bool { _, err := io.ReadFull(c, make([]byte, n)); return err == nil }
+	if _, err := c.Write([]byte("RFB 003.008\n")); err != nil || !lies(12) {
+		return
+	}
+	if _, err := c.Write([]byte{1, 1}); err != nil || !lies(1) {
+		return
+	}
+	if _, err := c.Write([]byte{0, 0, 0, 0}); err != nil || !lies(1) { // SecurityResult, ClientInit
+		return
+	}
+	init := []byte{4, 0, 3, 0, 32, 24, 0, 1, 0, 255, 0, 255, 0, 255, 16, 8, 0, 0, 0, 0}
+	init = binary.BigEndian.AppendUint32(init, 5)
+	if _, err := c.Write(append(init, "Stumm"...)); err != nil {
+		return
+	}
+	sv.conns <- c
+	if sv.fluten {
+		block := make([]byte, 64<<10)
+		for {
+			if _, err := c.Write(block); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// zu wartet, bis Keyway die Verbindung geschlossen hat (liest dazu, was noch ansteht).
+func (sv *stummerVNC) zu(t *testing.T, c net.Conn, frist time.Duration) {
+	t.Helper()
+	c.SetReadDeadline(time.Now().Add(frist))
+	if _, err := io.Copy(io.Discard, c); err != nil {
+		t.Fatalf("Keyway hält die Verbindung zum VNC-Server offen: %v", err)
+	}
+}
+
+// stummVerbinden oeffnet den Bildschirm eines stummen Servers bis nach ServerInit.
+func stummVerbinden(t *testing.T, ts *httptest.Server, c *client, sv *stummerVNC, sprache string) (*websocket.Conn, *wsLeitung, net.Conn) {
+	t.Helper()
+	h := vncHost(t, c, "", false, map[string]any{"name": "stumm", "vncPort": sv.port(), "vncWeg": "direkt"})
+	ws := vncOeffnen(t, ts, c, fmt.Sprintf("host=%d&sprache=%s", h.ID, sprache))
+	if n, alle := vncBis(t, ws); n.T != "bereit" {
+		t.Fatalf("statt bereit: %+v", alle)
+	}
+	b, l := betrachten(t, ws)
+	if b.Name != "Stumm" {
+		t.Fatalf("ServerInit: %+v", b)
+	}
+	select {
+	case conn := <-sv.conns:
+		return ws, l, conn
+	case <-time.After(3 * time.Second):
+		t.Fatal("stummer Server nicht verbunden")
+	}
+	return nil, nil, nil
+}
+
+// ablage baut ein ClientCutText mit n Bytes (wie ein grosses Einfuegen).
+func ablage(n int) []byte {
+	m := binary.BigEndian.AppendUint32([]byte{6, 0, 0, 0}, uint32(n))
+	return append(m, bytes.Repeat([]byte{'x'}, n)...)
+}
+
+// fluten schickt Zwischenablage-Bloecke, bis Keyway nichts mehr annimmt oder max erreicht ist.
+func fluten(ws *websocket.Conn, block []byte, max int) (gesendet int) {
+	for ; gesendet < max; gesendet++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		err := ws.Write(ctx, websocket.MessageBinary, block)
+		cancel()
+		if err != nil {
+			return gesendet
+		}
+	}
+	return gesendet
+}
+
+func vncVariablen(t *testing.T, schreibFrist, browserFrist time.Duration, stau int) {
+	alt := vncGrenzen.Swap(&vncWerte{schreibFrist: schreibFrist, browserFrist: browserFrist, stauGrenze: stau, nachlauf: 2 * time.Second})
+	t.Cleanup(func() { vncGrenzen.Store(alt) })
+}
+
+// Schliesst der Browser, geht vorher noch zum VNC-Server, was er davor geschickt hat (etwa
+// das SetDesktopSize, mit dem die Seite beim Trennen die Aufloesung zuruecksetzt).
+func TestVncNachlaufBeimSchliessen(t *testing.T) {
+	tv := testVNC(t, testvnc.Optionen{})
+	ts, _, c, _ := angemeldeteApp(t, Optionen{Version: "test"})
+	h := vncHost(t, c, "", false, map[string]any{"name": "hmi", "vncPort": tv.Port(), "vncWeg": "direkt"})
+	for runde := range 3 {
+		ws := vncOeffnen(t, ts, c, fmt.Sprintf("host=%d&sprache=de", h.ID))
+		if n, alle := vncBis(t, ws); n.T != "bereit" {
+			t.Fatalf("statt bereit: %+v", alle)
+		}
+		b, _ := betrachten(t, ws)
+		b.Kodierungen(0, -308)
+		const tasten = 300
+		for i := 0; i < tasten; i++ {
+			b.Taste(true, 'a')
+			b.Taste(false, 'a')
+		}
+		breite := 640 + 16*runde
+		b.GroesseSetzen(breite, 480)
+		ws.Close(websocket.StatusNormalClosure, "")
+		gross := fmt.Sprintf("groesse %dx480", breite)
+		warteBis(t, 5*time.Second, "alle Eingaben vor dem Schliessen beim VNC-Server", func() bool {
+			ev := tv.Ereignisse()
+			return slices.Contains(ev, gross) && len(slices.DeleteFunc(ev, func(e string) bool { return e != "taste 61 a" })) == tasten*(runde+1)
+		})
+		warteBis(t, 3*time.Second, "TCP zum VNC-Server zu", func() bool { return tv.Offen.Load() == 0 })
+		keineVncGoroutinen(t)
+	}
+}
+
+// Ein VNC-Server, der nichts mehr liest: Abmeldung und Schliessen des Browsers greifen
+// trotzdem sofort, das Schreiben laeuft in eigener Goroutine.
+func TestVncStummerServerAbmeldenUndAbbruch(t *testing.T) {
+	vncVariablen(t, time.Minute, 15*time.Second, 64<<20)
+	sv := stummerVNCStarten(t, false)
+	ts, _, c, _ := angemeldeteApp(t, Optionen{Version: "test"})
+
+	// Abmelden, waehrend das Schreiben zum Server haengt: 4001 innert Sekunden.
+	ws, l, conn := stummVerbinden(t, ts, c, sv, "de")
+	gelesen := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, l)
+		gelesen <- err
+	}()
+	block := ablage(1 << 20)
+	if n := fluten(ws, block, 40); n < 40 {
+		t.Fatalf("Keyway nimmt nach %d MB nichts mehr an", n)
+	}
+	time.Sleep(200 * time.Millisecond) // das Schreiben zum Server haengt jetzt
+	start := time.Now()
+	if code := c.rufe("POST", "/api/abmelden", nil, nil); code != 200 {
+		t.Fatalf("abmelden: %d", code)
+	}
+	select {
+	case <-gelesen:
+		if l.schluss != wsAbgemeldet || !l.hatText("abgemeldet") {
+			t.Fatalf("Schluss %d, Texte %+v", l.schluss, l.texte)
+		}
+		if d := time.Since(start); d > 8*time.Second {
+			t.Fatalf("Abmeldung erst nach %s", d)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("nach der Abmeldung bleibt der Bildschirm offen")
+	}
+	sv.zu(t, conn, 5*time.Second)
+	keineVncGoroutinen(t)
+
+	// Browser weg, waehrend das Schreiben haengt: alles baut ab.
+	c.rufe("POST", "/api/anmelden", map[string]string{"benutzer": "admin", "passwort": testPasswort}, nil)
+	ws, l, conn = stummVerbinden(t, ts, c, sv, "de")
+	go io.Copy(io.Discard, l)
+	fluten(ws, block, 40)
+	time.Sleep(200 * time.Millisecond)
+	ws.CloseNow()
+	sv.zu(t, conn, 5*time.Second)
+	keineVncGoroutinen(t)
+}
+
+// Speichergrenze: nimmt der Server nichts an, haeuft Keyway hoechstens stauGrenze an
+// und trennt dann mit verstaendlicher Meldung.
+func TestVncStummerServerStau(t *testing.T) {
+	vncVariablen(t, time.Minute, 15*time.Second, 6<<20)
+	sv := stummerVNCStarten(t, false)
+	ts, _, c, _ := angemeldeteApp(t, Optionen{Version: "test"})
+	ws, l, conn := stummVerbinden(t, ts, c, sv, "en")
+	gelesen := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, l)
+		gelesen <- err
+	}()
+	start := time.Now()
+	gesendet := fluten(ws, ablage(1<<20), 200)
+	select {
+	case <-gelesen:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("nach %d MB nicht getrennt", gesendet)
+	}
+	if gesendet >= 200 {
+		t.Fatal("Keyway hat 200 MB angenommen, ohne zu trennen")
+	}
+	if e := l.text("ende"); e.Text != "The VNC server stopped accepting data — disconnected" {
+		t.Fatalf("Ende: %+v (%+v)", e, l.texte)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Fatalf("erst nach %s getrennt", d)
+	}
+	sv.zu(t, conn, 5*time.Second)
+	keineVncGoroutinen(t)
+}
+
+// Schreibfrist: kommt ein Block zum Server nicht weiter, trennt der Waechter (auch ohne Stau).
+func TestVncStummerServerFrist(t *testing.T) {
+	vncVariablen(t, 400*time.Millisecond, 15*time.Second, 256<<20)
+	sv := stummerVNCStarten(t, false)
+	ts, _, c, _ := angemeldeteApp(t, Optionen{Version: "test"})
+	ws, l, conn := stummVerbinden(t, ts, c, sv, "de")
+	gelesen := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, l)
+		gelesen <- err
+	}()
+	gesendet := fluten(ws, ablage(1<<20), 64)
+	select {
+	case <-gelesen:
+	case <-time.After(10 * time.Second):
+		t.Fatalf("nach %d MB nicht getrennt", gesendet)
+	}
+	if e := l.text("ende"); e.Text != "Der VNC-Server nimmt keine Daten mehr an — Verbindung getrennt" {
+		t.Fatalf("Ende: %+v (%+v)", e, l.texte)
+	}
+	if l.schluss != websocket.StatusNormalClosure {
+		t.Fatalf("Schliesscode %d", l.schluss)
+	}
+	sv.zu(t, conn, 5*time.Second)
+	keineVncGoroutinen(t)
+}
+
+// Ein Browser, der nichts mehr liest: nach browserFrist baut Keyway ab, die
+// Verbindung zum VNC-Server inklusive.
+func TestVncBrowserLiestNicht(t *testing.T) {
+	vncVariablen(t, time.Minute, 300*time.Millisecond, 16<<20)
+	sv := stummerVNCStarten(t, true)
+	ts, _, c, _ := angemeldeteApp(t, Optionen{Version: "test"})
+	ws, _, conn := stummVerbinden(t, ts, c, sv, "de")
+	// Der Browser liest ab jetzt nicht mehr; der Server flutet.
+	sv.zu(t, conn, 10*time.Second)
+	keineVncGoroutinen(t)
+	ws.CloseNow()
+}
+
+// --- Schluessel des VNC-Servers beim Durchreichen (RA2, TOFU) ---
+
+func TestVncSchluessel(t *testing.T) {
+	ts, s, c, sk := angemeldeteApp(t, Optionen{Version: "test"})
+	h := vncHost(t, c, "", false, map[string]any{"name": "realvnc", "adresse": "10.0.0.9", "vncPort": 5901, "vncWeg": "direkt"})
+	pfad := fmt.Sprintf("/api/hosts/%d/vnc-schluessel", h.ID)
+	const ziel = "vnc:10.0.0.9:5901"
+	fp1 := "c4:1f:9e:00:5a:7b:22:13"
+	fp2 := "de:ad:be:ef:00:11:22:33"
+
+	// Unbekannt: nichts gemerkt; mit Fingerabdruck «neu».
+	var a vncSchluesselAntwort
+	if code := c.rufe("GET", pfad, nil, &a); code != 200 || a.Ziel != ziel || a.Bekannt || a.Status != "" {
+		t.Fatalf("leer: %d %+v", code, a)
+	}
+	a = vncSchluesselAntwort{}
+	if code := c.rufe("GET", pfad+"?typ=RSA&fingerprint="+fp1, nil, &a); code != 200 || a.Status != "neu" || a.Bekannt {
+		t.Fatalf("Vergleich neu: %d %+v", code, a)
+	}
+
+	// Ohne CSRF-Kopf und ohne Anmeldung: abgelehnt, nichts gespeichert.
+	rumpf := `{"typ":"RSA","fingerprint":"` + fp1 + `"}`
+	if code, _ := rufeMit(t, c, "POST", pfad, rumpf, map[string]string{"X-SSH-App": ""}); code != 403 {
+		t.Fatalf("ohne CSRF: %d", code)
+	}
+	anon := neuerClient(t, ts.URL, ts.Client())
+	if code := anon.rufe("POST", pfad, map[string]string{"typ": "RSA", "fingerprint": fp1}, nil); code != 401 {
+		t.Fatalf("ohne Anmeldung POST: %d", code)
+	}
+	if code := anon.rufe("GET", pfad, nil, nil); code != 401 {
+		t.Fatalf("ohne Anmeldung GET: %d", code)
+	}
+	if _, err := s.st.Bekannt(ziel); err == nil {
+		t.Fatal("ohne CSRF/Anmeldung gespeichert")
+	}
+
+	// Ungueltige Angaben, beide Sprachen; unbekannter Host.
+	for _, r := range []string{`{"typ":"","fingerprint":"x"}`, `{"typ":"RSA","fingerprint":"  "}`, `{"typ":"RSA","fingerprint":"a\nb"}`,
+		`{"typ":"RSA","fingerprint":"` + strings.Repeat("a", 300) + `"}`, `kein json`} {
+		code, de := rufeMit(t, c, "POST", pfad, r, nil)
+		_, en := rufeMit(t, c, "POST", pfad, r, englisch)
+		if code != 400 || de == "" || en == "" || de == en {
+			t.Errorf("%s: %d %q %q", r, code, de, en)
+		}
+	}
+	if code, text := rufeMit(t, c, "POST", pfad, `{"typ":"RSA"}`, englisch); text != "The VNC key’s type and fingerprint are missing or invalid" {
+		t.Errorf("englisch: %d %q", code, text)
+	}
+	if code, _ := rufeMit(t, c, "POST", "/api/hosts/999/vnc-schluessel", rumpf, nil); code != 404 {
+		t.Errorf("unbekannter Host: %d", code)
+	}
+
+	// Merken (neu), dann gleich (bleibt mit altem Datum).
+	a = vncSchluesselAntwort{}
+	if code := c.rufe("POST", pfad, map[string]string{"typ": "RSA", "fingerprint": " " + fp1 + " "}, &a); code != 200 || a.Status != "neu" || !a.Bekannt || a.Fingerprint != fp1 || a.Typ != "RSA" || a.Seit == nil {
+		t.Fatalf("merken: %d %+v", code, a)
+	}
+	b, err := s.st.Bekannt(ziel)
+	if err != nil || b.Fingerprint != fp1 || b.Typ != "RSA" || b.Schluessel != fp1 {
+		t.Fatalf("gespeichert: %+v %v", b, err)
+	}
+	a = vncSchluesselAntwort{}
+	if code := c.rufe("POST", pfad, map[string]string{"typ": "RSA", "fingerprint": fp1}, &a); code != 200 || a.Status != "gleich" || !a.Seit.Equal(b.Seit) {
+		t.Fatalf("gleich: %d %+v", code, a)
+	}
+	a = vncSchluesselAntwort{}
+	if c.rufe("GET", pfad+"?typ=RSA&fingerprint="+fp1, nil, &a); a.Status != "gleich" || !a.Bekannt || a.Fingerprint != fp1 {
+		t.Fatalf("Vergleich gleich: %+v", a)
+	}
+
+	// Geaendert: erkennbar; ohne «ersetzen» 409 und unveraendert, mit «ersetzen» ersetzt.
+	a = vncSchluesselAntwort{}
+	if c.rufe("GET", pfad+"?typ=RSA&fingerprint="+fp2, nil, &a); a.Status != "geaendert" || a.AltFingerprint != fp1 || a.AltTyp != "RSA" || a.Fingerprint != fp1 {
+		t.Fatalf("Vergleich geändert: %+v", a)
+	}
+	a = vncSchluesselAntwort{}
+	if code := c.rufe("POST", pfad, map[string]string{"typ": "RSA", "fingerprint": fp2}, &a); code != 409 || a.Status != "geaendert" || a.AltFingerprint != fp1 ||
+		a.Fehler != "Der Schlüssel des VNC-Servers von «realvnc» hat sich geändert — nur ersetzen, wenn der Fingerabdruck am Gerät stimmt" {
+		t.Fatalf("ohne ersetzen: %d %+v", code, a)
+	}
+	if code, text := rufeMit(t, c, "POST", pfad, `{"typ":"RSA","fingerprint":"`+fp2+`"}`, englisch); code != 409 ||
+		text != "The VNC server key for “realvnc” has changed — replace it only if the fingerprint matches the one on the device" {
+		t.Fatalf("englisch geändert: %d %q", code, text)
+	}
+	if b, _ := s.st.Bekannt(ziel); b.Fingerprint != fp1 {
+		t.Fatalf("ohne ersetzen überschrieben: %+v", b)
+	}
+	a = vncSchluesselAntwort{}
+	if code := c.rufe("POST", pfad, map[string]any{"typ": "RSA", "fingerprint": fp2, "ersetzen": true}, &a); code != 200 || a.Status != "geaendert" || a.AltFingerprint != fp1 || a.Fingerprint != fp2 {
+		t.Fatalf("ersetzen: %d %+v", code, a)
+	}
+	// Auch ein anderer Typ gilt als Aenderung.
+	a = vncSchluesselAntwort{}
+	if c.rufe("GET", pfad+"?typ=ECDSA&fingerprint="+fp2, nil, &a); a.Status != "geaendert" || a.AltTyp != "RSA" {
+		t.Fatalf("anderer Typ: %+v", a)
+	}
+
+	// In /api/daten (Bekannte Hosts) und im Backup; Rundlauf.
+	var d struct{ Bekannt []store.BekannterHost }
+	c.rufe("GET", "/api/daten", nil, &d)
+	if !slices.ContainsFunc(d.Bekannt, func(x store.BekannterHost) bool { return x.Ziel == ziel && x.Fingerprint == fp2 }) {
+		t.Fatalf("Daten: %+v", d.Bekannt)
+	}
+	backup := backupLaden(t, c)
+	ts2, s2 := testApp(t)
+	c2 := neuerClient(t, ts2.URL, ts2.Client())
+	if code, text := einspielenAn(c2, "/api/einspielen", backup, sk); code != 200 {
+		t.Fatalf("Einspielen: %d %s", code, text)
+	}
+	if b, err := s2.st.Bekannt(ziel); err != nil || b.Fingerprint != fp2 || b.Typ != "RSA" {
+		t.Fatalf("nach Rundlauf: %+v %v", b, err)
+	}
+
+	// Vergessen: ueber den Host und ueber «Bekannte Hosts».
+	if code := c.rufe("DELETE", pfad, nil, nil); code != 200 {
+		t.Fatalf("vergessen: %d", code)
+	}
+	if code := c.rufe("DELETE", pfad, nil, nil); code != 404 {
+		t.Fatalf("zweimal vergessen: %d", code)
+	}
+	c.rufe("POST", pfad, map[string]string{"typ": "RSA", "fingerprint": fp1}, nil)
+	if code := c.rufe("DELETE", "/api/bekannt/"+url.PathEscape(ziel), nil, nil); code != 200 {
+		t.Fatalf("über bekannt löschen: %d", code)
+	}
+	a = vncSchluesselAntwort{}
+	if c.rufe("GET", pfad, nil, &a); a.Bekannt {
+		t.Fatalf("nach dem Löschen: %+v", a)
+	}
+
+	// IPv6 in Klammern, Port-Vorgabe; der SSH-Schluessel desselben Hosts bleibt getrennt.
+	h6 := vncHost(t, c, "", false, map[string]any{"name": "v6", "adresse": "fd00::5", "vncWeg": "direkt"})
+	a = vncSchluesselAntwort{}
+	if c.rufe("POST", fmt.Sprintf("/api/hosts/%d/vnc-schluessel", h6.ID), map[string]string{"typ": "RSA", "fingerprint": fp1}, &a); a.Ziel != "vnc:[fd00::5]:5900" {
+		t.Fatalf("IPv6: %+v", a)
+	}
+	if _, err := s.st.Bekannt("[fd00::5]:5900"); err == nil {
+		t.Fatal("VNC-Schlüssel unter einem SSH-Ziel")
+	}
 }
