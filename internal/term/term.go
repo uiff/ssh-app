@@ -564,7 +564,6 @@ func (a *Anhang) Freigeben() { a.einmal.Do(func() { close(a.frei) }) }
 
 // Loesen haengt den Browser ab (die Sitzung laeuft weiter).
 func (a *Anhang) Loesen() {
-	a.Freigeben()
 	s := a.s
 	s.mu.Lock()
 	if s.anhang == a {
@@ -572,6 +571,9 @@ func (a *Anhang) Loesen() {
 		s.losSeit = time.Now()
 	}
 	s.mu.Unlock()
+	// Erst nach dem Loesen freigeben: ein wartendes Schreiben (ausgeben) sieht dann
+	// !Aktuell() und liefert nichts mehr an diesen Browser.
+	a.Freigeben()
 }
 
 // Aktuell meldet, ob dieser Browser noch angehaengt ist.

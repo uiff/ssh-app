@@ -170,6 +170,9 @@ und bedienen. Jeder Bildschirm öffnet sich als Tab neben den Terminals, auch me
   Sitzungen bleiben bestehen und sind nach der Anmeldung wieder da.
 - **Sicherheitsschlüssel:** wird bei der Einrichtung einmal angezeigt. Mit ihm setzt du ein vergessenes Passwort zurück
   und spielst Backups ein.
+- **Zwei-Faktor-Anmeldung (optional):** Vorgabe aus. Eingeschaltet braucht die Anmeldung zusätzlich einen 6-stelligen
+  Code aus einer Authenticator-App, und der Tresor entsperrt sich nur mit beidem. Sie läuft offline (siehe
+  [Zwei-Faktor-Anmeldung (optional)](#zwei-faktor-anmeldung-optional)).
 
 ### Dateien
 
@@ -291,8 +294,8 @@ App im Container läuft: `sudo chown 65532:65532 /pfad/zu/daten`. Sonst bricht d
 | Tag | Bedeutung |
 |---|---|
 | `latest` | die neueste Version |
-| `0.3.0` | genau diese Version |
-| `0.3` | die neueste Version von 0.3.x (nur Fehlerbehebungen) |
+| `0.4.0` | genau diese Version |
+| `0.4` | die neueste Version von 0.4.x (nur Fehlerbehebungen) |
 
 Jedes Image baut [GitHub Actions](https://github.com/uiff/ssh-app/actions/workflows/container.yml) aus diesem
 Repository. Es wird vor dem Veröffentlichen getestet und einmal gestartet und trägt einen Herkunftsnachweis
@@ -375,6 +378,48 @@ Einrichtung erledigt ist.
 
    Ohne Sicherheitsschlüssel ist ein Backup nicht lesbar.
 3. Hosts anlegen: Gerätetyp wählen, Adresse und Benutzername eintragen, Passwort eingeben oder beim Verbinden fragen lassen.
+
+## Zwei-Faktor-Anmeldung (optional)
+
+Die Zwei-Faktor-Anmeldung ist freiwillig und zu Beginn ausgeschaltet. Ist sie eingeschaltet, fragt Keyway nach dem
+Passwort zusätzlich nach einem 6-stelligen Code. Den Code liefert eine Authenticator-App auf dem Telefon, zum Beispiel
+Aegis, Microsoft Authenticator oder Google Authenticator. Der Tresor entsperrt sich und die Anmeldung klappt nur, wenn
+Passwort und Code beide stimmen.
+
+**Einschalten:** Einstellungen › Zwei-Faktor-Anmeldung › **Einrichten**.
+
+1. Den QR-Code mit der Authenticator-App scannen oder den Schlüssel daneben von Hand eintippen. Benutzt du Keyway auf
+   demselben Telefon, auf dem die Authenticator-App läuft, öffnet der Link «In der Authenticator-App öffnen» den
+   Eintrag direkt in der App.
+2. Den Code aus der App und das aktuelle Passwort eingeben, dann **Einschalten**.
+3. Keyway zeigt **einmal** die **10 Ersatzcodes** an. Kopieren oder als Datei speichern. Nicht auf dem Telefon mit der
+   Authenticator-App aufbewahren, sondern zum Beispiel ausgedruckt oder im Passwort-Manager auf einem anderen Gerät.
+
+**Anmelden:** Nach dem Passwort fragt Keyway nach dem Code. Ist das Telefon nicht zur Hand, «Ersatzcode verwenden»
+wählen. Jeder Ersatzcode gilt nur einmal. Danach sagt Keyway, wie viele noch übrig sind, auch die Einstellungen zeigen
+die Zahl. **Neue Ersatzcodes** ersetzt dort alle, die alten gelten dann nicht mehr. Auch das Ausschalten verlangt
+Passwort und Code. Danach den Eintrag «Keyway» in der Authenticator-App löschen: Beim erneuten Einrichten entsteht ein
+neuer.
+
+**Läuft offline:** Weder Keyway noch die Authenticator-App brauchen Internet, auch den QR-Code zeichnet Keyway selbst.
+Beide berechnen den Code aus dem gemeinsamen Schlüssel und der aktuellen Uhrzeit. Deshalb müssen die Uhren von Server
+und Telefon ungefähr übereinstimmen, auf etwa eine halbe Minute genau (Keyway nimmt auch den Code davor und danach
+an). Keyway nimmt die Uhr des Rechners, auf dem es läuft. Ein Raspberry Pi hat keine Uhr mit Batterie und kann ohne
+Internet mit einer falschen Zeit starten. Sorg dafür, dass er die Zeit aus dem eigenen Netz bekommt, zum Beispiel per
+NTP vom Router, oder melde dich mit einem Ersatzcode an. Passt ein Code zu einer Uhrzeit bis zu 20 Minuten daneben,
+sagt die Fehlermeldung das und nennt die Abweichung in Minuten. Ein solcher Code wird auch später nicht gültig: Nach dem
+Stellen der Uhr den nächsten Code nehmen. Geht das Telefon höchstens eine Minute vor, heisst es nur, der Code stimme
+nicht, und derselbe Code gilt ein paar Sekunden später. Beim Einrichten zeigt der Dialog die Uhrzeit des Servers und
+warnt, wenn die Uhr des Geräts, an dem du sitzt, mehr als 30 Sekunden abweicht.
+
+**Telefon verloren?** Mit einem Ersatzcode anmelden. Danach in den Einstellungen die Zwei-Faktor-Anmeldung mit einem
+weiteren Ersatzcode ausschalten und auf dem neuen Telefon wieder einrichten. Ohne Ersatzcodes hilft «Passwort
+vergessen?» auf der Anmeldeseite: Das Zurücksetzen mit dem Sicherheitsschlüssel schaltet die Zwei-Faktor-Anmeldung
+auch aus.
+
+**Backup:** Die Zwei-Faktor-Anmeldung gehört zur Anmeldung und reist deshalb verschlüsselt im Backup mit. Nach dem
+Einspielen gilt, was das gesicherte System hatte: eingeschaltet mit dessen Authenticator-Eintrag und Ersatzcodes, oder
+ausgeschaltet. Passwort ändern lässt die Zwei-Faktor-Anmeldung eingeschaltet.
 
 ## Backup und Umzug
 
@@ -512,6 +557,15 @@ beim Start im Log hin.
   paralleles Raten stösst also an dieselbe Grenze, und bei Überlast bittet die Anmeldung kurz um Geduld. Dazu Cookies
   `HttpOnly` und `SameSite=Strict`, eigener Kopf gegen CSRF, strenge Content-Security-Policy, Schutz vor DNS-Rebinding im
   HTTP-Betrieb.
+- Zwei-Faktor-Anmeldung (optional, TOTP nach RFC 6238): Der Tresor entsperrt sich und die Anmeldung klappt nur, wenn
+  Passwort und Code beide stimmen. Ein falscher Code zählt als Fehlversuch, jeder Code gilt nur einmal, und ein falsches
+  Passwort verrät nicht, ob die Zwei-Faktor-Anmeldung eingeschaltet ist. Falsche Codes zählen auch für das ganze Konto,
+  egal von welchen Adressen und wie langsam sie kommen: Nach 10 in Folge ohne richtigen Code nimmt Keyway 15 Minuten
+  lang keine Codes aus der App an, und jede weitere Sperre ohne richtigen Code dazwischen dauert doppelt so lang,
+  höchstens 24 Stunden (Ersatzcodes gelten weiter). Ab 5 falschen Codes in Folge warnt es im Log, dass das Passwort
+  vermutlich bekannt ist, und ab 3 sagt die nächste Anmeldung, wie viele es waren. Ein Code, der nur wegen einer falsch
+  gehenden Uhr scheitert oder schon verwendet wurde, zählt hier nicht. Ein neues Passwort hebt die Sperre auf. Der
+  Schlüssel für die Codes liegt mit dem Schlüssel des Tresors verschlüsselt in der Datenbank.
 - Passwörter und private Schlüssel liegen nur verschlüsselt in der Datenbank. Der Schlüssel dazu liegt nur im Arbeitsspeicher
   und wird beim Sperren verworfen (Abmelden oder Leerlauf). Kopien, die Go selbst anlegt (etwa das eingegebene Passwort oder
   interne Puffer), lassen sich nicht garantiert löschen. Wer den Speicher des Prozesses lesen kann (root, Core-Dump, Swap),

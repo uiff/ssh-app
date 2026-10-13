@@ -165,6 +165,9 @@ screen opens as a tab next to your terminals, and you can have several open at o
 - **Automatic lock:** after 30 minutes without activity you are signed out and the vault locks. Running sessions keep
   going and are back after you sign in.
 - **Recovery key:** shown once during setup. It resets a forgotten password and unlocks backups.
+- **Two-factor sign-in (optional):** off by default. When it is on, signing in also needs a 6-digit code from an
+  authenticator app, and the vault unlocks only with both. It works offline (see
+  [Two-factor sign-in (optional)](#two-factor-sign-in-optional)).
 
 ### Files
 
@@ -286,8 +289,8 @@ as inside the container: `sudo chown 65532:65532 /path/to/data`. Otherwise the a
 | Tag | Meaning |
 |---|---|
 | `latest` | the latest release |
-| `0.3.0` | exactly this release |
-| `0.3` | the latest release of 0.3.x (bug fixes only) |
+| `0.4.0` | exactly this release |
+| `0.4` | the latest release of 0.4.x (bug fixes only) |
 
 Every image is built by [GitHub Actions](https://github.com/uiff/ssh-app/actions/workflows/container.yml) from this
 repository, is tested and started once before it is published, and carries a provenance attestation and an SBOM.
@@ -367,6 +370,44 @@ account or restore a backup. Whoever comes first sets it up. So only open the po
 
    Without the recovery key, a backup can’t be read.
 3. Add hosts: pick a device type, enter address and username, then type the password or let the app ask when you connect.
+
+## Two-factor sign-in (optional)
+
+Two-factor sign-in is off by default. When it is on, Keyway asks for a 6-digit code after your password. The code
+comes from an authenticator app on your phone, for example Aegis, Microsoft Authenticator, or Google Authenticator.
+The vault unlocks and the sign-in succeeds only when both the password and the code are right.
+
+**Turn it on:** Settings › Two-factor sign-in › **Set up**.
+
+1. Scan the QR code with the authenticator app, or type in the key shown next to it. If you use Keyway on the same
+   phone as the authenticator app, a link opens the entry in the app directly.
+2. Enter the code the app shows and your current password, then turn it on.
+3. Keyway shows **10 backup codes** only **once**. Copy them or save them as a file. Don’t keep them on the phone with
+   your authenticator app: print them, for example, or store them in a password manager on another device.
+
+**Signing in:** after the password, Keyway asks for the code. If your phone isn’t at hand, switch to a backup code.
+Each backup code works only once. After you use one, Keyway tells you how many are left, and Settings shows the count
+too. **New backup codes** there replaces all of them, and the old ones stop working. Turning two-factor sign-in off
+also asks for your password and a code. Afterwards, delete the “Keyway” entry in your authenticator app: setting it up
+again creates a new one.
+
+**Works offline:** neither Keyway nor the authenticator app needs the internet, and Keyway draws the QR code itself.
+Both compute the code from the shared key and the current time. That is why the clocks of the server and the phone
+have to match roughly, within about half a minute (Keyway also accepts the code just before and just after). Keyway
+uses the clock of the machine it runs on. A Raspberry Pi has no battery-backed clock, so without internet it can start
+with the wrong time. Make sure it gets the time from your network, for example by NTP from your router, or sign in with
+a backup code. If a code fits a time up to 20 minutes away, the error message says so and names the offset in minutes.
+Such a code doesn’t become valid later: after fixing the clock, use the next code. If the phone is at most a minute
+ahead, the message only says the code is wrong, and the same code works a few seconds later. During setup, the dialog
+shows the server’s time and warns you if the clock of the device you are using is more than 30 seconds off.
+
+**Lost your phone?** Sign in with a backup code. Then turn two-factor sign-in off in Settings with another backup code
+and set it up again on the new phone. Without backup codes, use “Forgot your password?” on the sign-in page: resetting
+the password with the recovery key also turns two-factor sign-in off.
+
+**Backups:** two-factor sign-in is part of the sign-in, so it travels with the backup, encrypted. After restoring, what
+the backed-up system had applies: on, with its authenticator entry and backup codes, or off. Changing the password
+leaves two-factor sign-in on.
 
 ## Backup and moving to a new system
 
@@ -502,6 +543,14 @@ at startup.
   progress count too, so guessing in parallel runs into the same limit, and under heavy load sign-in briefly asks you to
   wait. Cookies are `HttpOnly` and `SameSite=Strict`, there is a custom header against CSRF, a strict Content Security
   Policy, and DNS rebinding protection in HTTP mode.
+- Two-factor sign-in (optional, TOTP as in RFC 6238): the vault unlocks and the sign-in succeeds only when the password
+  and the code are both right. A wrong code counts as a failed attempt, each code is accepted only once, and a wrong
+  password doesn’t reveal whether two-factor sign-in is on. Wrong codes also count for the account as a whole, from any
+  addresses and however slowly they come: after 10 in a row without a correct code, Keyway refuses codes from the app
+  for 15 minutes, and each further lock without a correct code in between lasts twice as long, up to 24 hours (backup
+  codes still work). From 5 wrong codes in a row it warns in the log that the password is probably known, and from 3
+  the next sign-in says how many there were. A code that fails only because of a wrong clock, or that was already used,
+  doesn’t count here. A new password ends the lock. The key behind the codes is encrypted with the vault key.
 - Passwords and private keys are stored only encrypted in the database. The key for them lives only in memory and is
   discarded when the vault locks (sign-out or inactivity). Copies that Go makes on its own (such as the password you
   typed or internal buffers) can’t be wiped reliably. Anyone who can read the process memory (root, core dump, swap) may

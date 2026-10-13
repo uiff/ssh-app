@@ -69,14 +69,14 @@ func TestZuruecksetzenMitSicherheitsschluessel(t *testing.T) {
 	tr, kopf, sk := eingerichtet(t)
 	geheim, _ := tr.Verschluesseln([]byte("x"))
 	tr2, _ := Neu(kopf)
-	if _, err := tr2.Zuruecksetzen(SchluesselFormatieren(make([]byte, 32)), "admin", "neues-passwort-1"); !errors.Is(err, ErrSchluesselFalsch) {
+	if _, _, err := tr2.Zuruecksetzen(SchluesselFormatieren(make([]byte, 32)), "admin", "neues-passwort-1"); !errors.Is(err, ErrSchluesselFalsch) {
 		t.Fatalf("falscher Schluessel: %v", err)
 	}
 	// Kleinschreibung und Leerzeichen beim Abtippen sind erlaubt.
 	locker := strings.ToLower(strings.ReplaceAll(sk, "-", " "))
-	neuKopf, err := tr2.Zuruecksetzen(locker, "chef", "neues-passwort-1")
-	if err != nil {
-		t.Fatal(err)
+	neuKopf, zfAus, err := tr2.Zuruecksetzen(locker, "chef", "neues-passwort-1")
+	if err != nil || zfAus {
+		t.Fatal(err, zfAus)
 	}
 	tr3, _ := Neu(neuKopf)
 	if err := tr3.Anmelden("admin", "richtig-langes-pw"); err == nil {
@@ -89,7 +89,7 @@ func TestZuruecksetzenMitSicherheitsschluessel(t *testing.T) {
 		t.Fatalf("Geheimnis nach Zuruecksetzen: %q %v", klar, err)
 	}
 	// Der Sicherheitsschluessel bleibt gueltig.
-	if _, err := tr3.Zuruecksetzen(sk, "chef", "drittes-passwort"); err != nil {
+	if _, _, err := tr3.Zuruecksetzen(sk, "chef", "drittes-passwort"); err != nil {
 		t.Fatal(err)
 	}
 }

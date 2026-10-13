@@ -231,6 +231,10 @@ App.einstellungen = function () {
   const bekanntZeichnen = () => ersetzen(bekannt, ...(App.daten.bekannt.length ? App.daten.bekannt.map(bekanntZeile)
     : [el('p', { style: { margin: 0, color: 'var(--leise)' } }, t('hosts.einst.keine'))]));
   bekanntZeichnen();
+  // Zwei-Faktor-Anmeldung (optional): nach jeder Aenderung neu gezeichnet.
+  const zweitfaktor = el('div', { class: 'einstellungen-gruppe' });
+  const zweitfaktorZeichnen = () => ersetzen(zweitfaktor, zweitfaktorTeil(zweitfaktorZeichnen));
+  zweitfaktorZeichnen();
 
   dialog({
     titel: t('hosts.einst.titel'), breit: true,
@@ -263,6 +267,7 @@ App.einstellungen = function () {
           if (neu1.value !== neu2.value) { toast(t('hosts.einst.pwUngleich'), 'fehler'); feldMarkieren(neu2); return; }
           try { await api('POST', '/api/passwort', { alt: alt.value, neu: neu1.value }); alt.value = neu1.value = neu2.value = ''; toast(t('hosts.einst.pwGeaendert')); } catch (e) { fehlerToast(e); }
         } }, t('hosts.einst.pwAendern')))),
+      zweitfaktor,
       el('div', { class: 'einstellungen-gruppe' },
         el('h4', null, t('hosts.einst.bekannt')),
         el('p', null, t('hosts.einst.bekanntText')),
@@ -276,6 +281,248 @@ App.einstellungen = function () {
         el('div', null, el('a', { class: 'btn klein', href: 'vendor/licenses/', target: '_blank', rel: 'noopener' }, t('hosts.einst.lizenzen'))))),
   });
 };
+
+// ---------- Zwei-Faktor-Anmeldung (Einstellungen) ----------
+// Optional, Vorgabe aus. Code aus einer Authenticator-App (TOTP, laeuft ohne Internet), dazu
+// 10 Ersatzcodes fuer die Anmeldung ohne Telefon. Stand aus /api/status: zweitfaktor, ersatzcodesUebrig.
+
+async function statusNeu() {
+  try { App.status = await api('GET', '/api/status'); } catch (e) { /* alter Stand bleibt */ }
+}
+
+// Inhalt der Gruppe in den Einstellungen; neuZeichnen baut sie nach einer Aenderung neu.
+function zweitfaktorTeil(neuZeichnen) {
+  const st = App.status;
+  const titel = el('h4', null, t('hosts.tf.titel'));
+  if (!st.zweitfaktor) {
+    return [titel,
+      el('p', null, t('hosts.tf.text')),
+      el('div', { class: 'tf-stand tf-aus' }, el('span', null, t('hosts.tf.aus'))),
+      el('div', { class: 'reihe einst-knoepfe' },
+        // Gesperrt, solange die Anfrage laeuft: ein Doppelklick oeffnet keinen zweiten Dialog.
+        el('button', { class: 'btn', type: 'button', onclick: async (e) => {
+          const k = e.currentTarget;
+          if (k.disabled) return;
+          k.disabled = true;
+          try { await zweitfaktorEinrichten(neuZeichnen); } finally { k.disabled = false; }
+        } }, icon('schild'), t('hosts.tf.einrichten')))];
+  }
+  const n = st.ersatzcodesUebrig;
+  const bekannt = typeof n === 'number';
+  const wenig = bekannt && n <= 2;
+  const stand = !bekannt ? t('hosts.tf.anOhne') : n === 0 ? t('hosts.tf.an0') : n === 1 ? t('hosts.tf.an1') : t('hosts.tf.an', { n });
+  return [titel,
+    el('div', { class: 'tf-stand' + (wenig ? ' tf-wenig' : '') }, icon(wenig ? 'warnung' : 'schild', 18), el('span', null, stand)),
+    wenig ? el('div', { class: 'meldung warn' }, icon('warnung'), el('span', null, t('hosts.tf.wenig'))) : null,
+    el('p', null, t('hosts.tf.anText')),
+    el('div', { class: 'reihe einst-knoepfe' },
+      el('button', { class: 'btn' + (wenig ? ' primaer' : ''), type: 'button', onclick: () => zweitfaktorBestaetigen(false, neuZeichnen) }, icon('neu'), t('hosts.tf.neueCodes')),
+      el('button', { class: 'btn gefahr', type: 'button', onclick: () => zweitfaktorBestaetigen(true, neuZeichnen) }, t('hosts.tf.ausschalten')))];
+}
+
+// Zeitabstand in Worten (Uhrabweichung): Sekunden, Minuten oder Stunden.
+function dauerText(sek) {
+  if (sek < 120) return t('hosts.tf.sekunden', { n: Math.round(sek) });
+  if (sek < 7200) return t('hosts.tf.minuten', { n: Math.round(sek / 60) });
+  return t('hosts.tf.stunden', { n: Math.round(sek / 3600) });
+}
+
+// Fehler im Dialog: Text bleibt stehen (meldung ist aria-live), das Feld wird markiert.
+// Desktop: Fokus ins Feld. Telefon: ohne Fokus (die Tastatur bleibt zu) das Feld in den Blick
+// rollen — Schritt 2 und die Meldung liegen dort oft unter dem Rand.
+function tfFehler(meldung, text, feld) {
+  ersetzen(meldung, el('div', { class: 'meldung fehler' }, text));
+  if (feld) {
+    feld.setAttribute('aria-invalid', 'true');
+    if (!App.istTelefon()) feld.focus();
+    else feld.scrollIntoView({ block: 'center', behavior: window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  }
+}
+
+// Fehler von Einschalten, Ausschalten oder Ersatzcodes: Nennt der Server das Passwort
+// (feld: 'passwort'), wird das Passwort geleert und markiert, der Code bleibt stehen — und
+// weil das Passwortfeld leer ist, sendet die 6. Ziffer eines neuen Codes nicht ab. Sonst
+// (Code falsch, Uhrzeit, Sperre) muss der Code neu.
+function tfAntwortFehler(meldung, e, pw, code) {
+  if (e.daten && e.daten.feld === 'passwort') {
+    pw.value = '';
+    tfFehler(meldung, e.message, pw);
+    return;
+  }
+  code.input.value = '';
+  tfFehler(meldung, e.message, code.input);
+}
+
+// Einrichten: QR-Code (oder Schluessel von Hand), Serverzeit, dann Code + Passwort zum Einschalten.
+async function zweitfaktorEinrichten(neuZeichnen) {
+  let r;
+  try { r = await api('POST', '/api/zweitfaktor/beginnen', {}); } catch (e) {
+    fehlerToast(e);
+    if (e.status === 409) { await statusNeu(); neuZeichnen(); } // schon eingeschaltet (anderes Fenster)
+    return;
+  }
+  const meldung = el('div', { 'aria-live': 'assertive' });
+  const pw = el('input', { id: 'tf-e-pw', type: 'password', autocomplete: 'current-password', oninput: () => pw.removeAttribute('aria-invalid') });
+  // 6. Ziffer: absenden, wenn das Passwort schon steht, sonst weiter ins Passwortfeld.
+  const code = codeFeld('tf-e-code', () => { if (pw.value) los(); else pw.focus(); });
+  const knopf = el('button', { class: 'btn primaer', type: 'button', onclick: () => los() }, icon('schild'), t('hosts.tf.einschalten'));
+
+  // Uhrzeit des Servers, laufend weitergezaehlt. Weicht die Uhr dieses Geraets mehr als 30 s ab,
+  // stimmt vermutlich eine der Uhren nicht — die Codes passen nur bei richtiger Zeit.
+  const uhrZeit = el('b', { class: 'mono' });
+  const t0 = performance.now();
+  const serverJetzt = () => r.serverzeit + (performance.now() - t0);
+  const uhrZeichnen = () => {
+    uhrZeit.textContent = new Date(serverJetzt()).toLocaleTimeString(lokalCode(), { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+  };
+  let uhr = null, uhrWarnung = null;
+  if (typeof r.serverzeit === 'number') {
+    uhrZeichnen();
+    uhr = setInterval(uhrZeichnen, 1000);
+    const abweichung = Math.abs(Date.now() - serverJetzt()) / 1000;
+    if (abweichung > 30) uhrWarnung = el('div', { class: 'meldung warn' }, icon('warnung'), el('span', null, t('hosts.tf.abweichung', { dauer: dauerText(abweichung) })));
+  }
+  const schluessel = String(r.schluessel || '');
+
+  let laeuft = false;
+  async function los() {
+    if (laeuft) return;
+    ersetzen(meldung);
+    if (!code.voll()) { tfFehler(meldung, t('basis.code.fehlt'), code.input); return; }
+    if (!pw.value) { tfFehler(meldung, t('hosts.tf.pwFehlt'), pw); return; }
+    laeuft = true; knopf.disabled = true;
+    try {
+      const a = await api('POST', '/api/zweitfaktor/einschalten', { passwort: pw.value, code: code.wert() }, { antwort401: true });
+      pw.value = '';
+      dlg.zu();
+      await statusNeu(); neuZeichnen();
+      ersatzcodesZeigen(a.ersatzcodes || [], t('hosts.tf.anTitel'), false);
+    } catch (e) {
+      laeuft = false; knopf.disabled = false;
+      if (e.abgemeldet) return;
+      // 409: Einrichtung abgelaufen (30 Minuten) oder inzwischen eingeschaltet — neu beginnen.
+      if (e.status === 409) { dlg.zu(); fehlerToast(e); await statusNeu(); neuZeichnen(); return; }
+      // Falsches Passwort oder falscher Code (mit Hinweis auf die Uhrzeit).
+      tfAntwortFehler(meldung, e, pw, code);
+    }
+  }
+
+  // Schritt 1 auf dem Desktop zweispaltig (QR-Code links), damit alles ohne Rollen ins Bild passt.
+  const dlg = dialog({
+    titel: t('hosts.tf.einrichtenTitel'), breit: true,
+    inhalt: el('form', { class: 'tf-form', onsubmit: (e) => { e.preventDefault(); los(); } },
+      el('div', { class: 'tf-schritt' },
+        el('div', { class: 'tf-schritt-kopf' }, el('span', { class: 'tf-nr', 'aria-hidden': 'true' }, '1'), el('span', null, t('hosts.tf.schritt1'))),
+        el('div', { class: 'tf-teil' },
+          r.qr ? el('div', { class: 'tf-qr' }, el('img', { src: r.qr, alt: t('hosts.tf.qrAlt'), width: '200', height: '200' })) : null,
+          el('div', { class: 'tf-teil-rechts' },
+            r.uri ? el('div', { class: 'tf-oeffnen' },
+              el('a', { class: 'btn klein', href: r.uri }, icon('telefon'), t('hosts.tf.oeffnen')),
+              el('span', { class: 'check-hinweis' }, t('hosts.tf.oeffnenHinweis'))) : null,
+            el('p', { class: 'tf-text' }, t('hosts.tf.manuell')),
+            el('div', { class: 'tf-schluessel' }, schluessel),
+            el('div', null, el('button', { class: 'btn klein', type: 'button', onclick: () => kopieren(schluessel.replace(/\s+/g, '')) }, icon('kopieren'), t('hosts.tf.schluesselKopieren'))),
+            uhr ? el('div', { class: 'tf-uhr' }, icon('uhr', 16), el('span', null, tTeile('hosts.tf.serverzeit', { zeit: uhrZeit }))) : null)),
+        uhrWarnung),
+      el('div', { class: 'tf-schritt' },
+        el('div', { class: 'tf-schritt-kopf' }, el('span', { class: 'tf-nr', 'aria-hidden': 'true' }, '2'), el('span', null, t('hosts.tf.schritt2'))),
+        el('div', { class: 'raster2' }, feldMit('tf-e-code', t('basis.code.app'), code.input), feldMit('tf-e-pw', t('hosts.tf.passwort'), pw)),
+        meldung),
+      el('button', { type: 'submit', class: 'versteckt' })),
+    knoepfe: [
+      el('button', { class: 'btn nur-desktop', type: 'button', onclick: () => dlg.zu() }, t('hosts.knopf.abbrechen')),
+      knopf,
+    ],
+    // Desktop: Fokus ins Codefeld nur, wenn es ohne Rollen sichtbar ist — der QR-Code bleibt im Bild.
+    feld: (d) => {
+      const fuss = d.querySelector('.dialog-fuss');
+      return code.input.getBoundingClientRect().bottom <= (fuss ? fuss.getBoundingClientRect().top : innerHeight) ? code.input : null;
+    },
+    beimSchliessen: () => { if (uhr) clearInterval(uhr); pw.value = ''; },
+  });
+}
+
+// Ausschalten (aus = true) oder neue Ersatzcodes: beides mit Passwort und Code bestaetigen.
+// Beides geht auch mit einem Ersatzcode (Telefon verloren oder Codes aus der App gesperrt).
+function zweitfaktorBestaetigen(aus, neuZeichnen) {
+  const meldung = el('div', { 'aria-live': 'assertive' });
+  const pw = el('input', { id: 'tf-b-pw', type: 'password', autocomplete: 'current-password', oninput: () => pw.removeAttribute('aria-invalid') });
+  const code = codeFeld('tf-b-code', () => { if (pw.value) los(); else pw.focus(); });
+  const codeLabel = el('label', { for: 'tf-b-code' }, t('basis.code.app'));
+  const wechsel = el('button', { class: 'textlink', type: 'button', onclick: () => {
+    const ersatz = !code.istErsatz();
+    code.ersatz(ersatz);
+    codeLabel.textContent = t(ersatz ? 'basis.code.ersatz' : 'basis.code.app');
+    wechsel.textContent = t(ersatz ? 'basis.code.appVerwenden' : 'basis.code.ersatzVerwenden');
+    ersetzen(meldung);
+    code.input.focus();
+  } }, t('basis.code.ersatzVerwenden'));
+  const knopf = el('button', { class: 'btn ' + (aus ? 'gefahr' : 'primaer'), type: 'button', onclick: () => los() },
+    aus ? null : icon('neu'), t(aus ? 'hosts.tf.ausschalten' : 'hosts.tf.erzeugen'));
+
+  let laeuft = false;
+  async function los() {
+    if (laeuft) return;
+    ersetzen(meldung);
+    if (!pw.value) { tfFehler(meldung, t('hosts.tf.pwFehlt'), pw); return; }
+    if (!code.voll()) { tfFehler(meldung, t(code.istErsatz() ? 'basis.code.ersatzFehlt' : 'basis.code.fehlt'), code.input); return; }
+    laeuft = true; knopf.disabled = true;
+    try {
+      const r = await api('POST', aus ? '/api/zweitfaktor/ausschalten' : '/api/zweitfaktor/ersatzcodes',
+        { passwort: pw.value, code: code.wert() }, { antwort401: true });
+      pw.value = '';
+      dlg.zu();
+      await statusNeu(); neuZeichnen();
+      // Gelb und laenger sichtbar: Der Eintrag in der Authenticator-App gilt nicht mehr.
+      if (aus) toast(t('hosts.tf.ausGeschaltet'), 'warn');
+      else ersatzcodesZeigen(r.ersatzcodes || [], t('hosts.tf.neuTitel'), true);
+    } catch (e) {
+      laeuft = false; knopf.disabled = false;
+      if (e.abgemeldet) return;
+      if (e.status === 409) { dlg.zu(); fehlerToast(e); await statusNeu(); neuZeichnen(); return; } // schon aus
+      tfAntwortFehler(meldung, e, pw, code);
+    }
+  }
+
+  const dlg = dialog({
+    titel: t(aus ? 'hosts.tf.ausTitel' : 'hosts.tf.neuTitel'),
+    inhalt: el('form', { class: 'tf-form', onsubmit: (e) => { e.preventDefault(); los(); } },
+      el('p', { class: 'tf-text' }, t(aus ? 'hosts.tf.ausText' : 'hosts.tf.neuText')),
+      feldMit('tf-b-pw', t('hosts.tf.passwort'), pw),
+      el('div', { class: 'feld' }, codeLabel, code.input, el('div', null, wechsel)),
+      meldung,
+      el('button', { type: 'submit', class: 'versteckt' })),
+    knoepfe: [
+      el('button', { class: 'btn nur-desktop', type: 'button', onclick: () => dlg.zu() }, t('hosts.knopf.abbrechen')),
+      knopf,
+    ],
+    beimSchliessen: () => { pw.value = ''; },
+  });
+}
+
+// Die 10 Ersatzcodes: nur jetzt sichtbar. Kopieren, als Datei speichern; schliessen erst, wenn
+// bestaetigt ist, dass sie aufbewahrt sind (wie beim Sicherheitsschluessel).
+function ersatzcodesZeigen(codes, titel, neu) {
+  const fertig = el('button', { class: 'btn primaer', type: 'button', disabled: true, onclick: () => d.zu() }, t('hosts.tf.fertig'));
+  const ok = el('input', { type: 'checkbox', onchange: () => { fertig.disabled = !ok.checked; } });
+  const liste = codes.join('\n');
+  const datei = t('hosts.tf.datei', { benutzer: App.status.benutzer || '', zeit: isoZeit(new Date()), adresse: location.origin, codes: liste });
+  const d = dialog({
+    titel, schliessbar: false,
+    inhalt: el('div', { class: 'tf-form' },
+      neu ? null : el('div', { class: 'meldung gut' }, icon('schild'), el('span', null, t('hosts.tf.anMeldung'))),
+      el('p', { class: 'tf-text' }, t('hosts.tf.codesText'), neu ? ' ' + t('hosts.tf.codesNeuText') : null),
+      el('div', { class: 'tf-codes', role: 'list', 'aria-label': t('hosts.tf.codesName') }, codes.map((c) => el('span', { role: 'listitem' }, c))),
+      el('div', { class: 'reihe einst-knoepfe' },
+        el('button', { class: 'btn', type: 'button', onclick: () => kopieren(liste) }, icon('kopieren'), t('hosts.tf.kopieren')),
+        el('button', { class: 'btn', type: 'button', onclick: () => textDatei(t('hosts.tf.dateiname'), datei) }, icon('runter'), t('hosts.tf.speichern'))),
+      el('div', { class: 'meldung warn' }, icon('warnung'), el('span', null, t('hosts.tf.warn'))),
+      el('label', { class: 'check' }, ok, el('span', null, t('hosts.tf.ok')))),
+    knoepfe: [fertig],
+  });
+  // Ohne Eingabefeld und mit gesperrtem «Fertig»: Fokus in den Dialog (sonst bleibt er dahinter).
+  if (!App.istTelefon()) d.element.focus({ preventScroll: true });
+}
 
 App.backupEinspielen = function (angemeldet) {
   // Eigener Knopf statt des Browser-Felds: dessen Beschriftung folgt der Browser-Sprache, nicht der App.

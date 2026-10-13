@@ -85,6 +85,10 @@ const ICONS = {
   trennen: 'M9 15l-2 2a3 3 0 0 1-4.2-4.2l2-2M15 9l2-2a3 3 0 0 1 4.2 4.2l-2 2M8 3v3M3 8h3M16 21v-3M21 16h-3',
   chevronRunter: 'M6 9l6 6 6-6',
   chevronHoch: 'M6 15l6-6 6 6',
+  // Zwei-Faktor-Anmeldung: Schild mit Haken (eingeschaltet), Telefon (App oeffnen), Uhr (Serverzeit).
+  schild: 'M12 3l8 3v5c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6zM8.5 12l2.5 2.5 4.5-5',
+  telefon: 'M7 2h10v20H7zM11 18h2',
+  uhr: 'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20zM12 7v5l3 2',
 };
 function icon(name, groesse) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -103,8 +107,9 @@ function ikonKnopf(name, label, onclick, extra) {
 }
 
 // ---------- API ----------
+// daten: der gelesene JSON-Rumpf der Fehlerantwort (z.B. { fehler, zweitfaktor: true }), sonst null.
 class ApiFehler extends Error {
-  constructor(text, status) { super(text); this.status = status; }
+  constructor(text, status, daten) { super(text); this.status = status; this.daten = daten || null; }
 }
 
 // Routen ohne Anmeldung: eine 401 dort ist eine Antwort (z.B. falscher Sicherheitsschluessel),
@@ -112,6 +117,8 @@ class ApiFehler extends Error {
 const OFFENE_ROUTEN = ['/api/status', '/api/anmelden', '/api/einrichten', '/api/zuruecksetzen', '/api/einspielen'];
 
 // opt.auto: automatische Abfrage (Zeitgeber, Wiederverbinden). Sie verlaengert die Anmeldung nicht.
+// opt.antwort401: Auf dieser Route ist eine 401 auch eine Antwort (falsches Passwort, falscher Code
+// der Zwei-Faktor-Anmeldung). Ob die Anmeldung abgelaufen ist, klaert dann /api/status.
 // Jede Anfrage nennt die Sprache der Oberflaeche (Fehlermeldungen des Servers kommen darin).
 async function api(methode, pfad, rumpf, opt) {
   const kopf = { 'X-SSH-App': '1', 'X-SSH-App-Sprache': I18N.sprache };
@@ -125,9 +132,10 @@ async function api(methode, pfad, rumpf, opt) {
   let daten = null;
   try { daten = await res.json(); } catch (e) { /* leer */ }
   if (!res.ok) {
-    const f = new ApiFehler((daten && daten.fehler) || t('basis.fehlerStatus', { status: res.status }), res.status);
+    const f = new ApiFehler((daten && daten.fehler) || t('basis.fehlerStatus', { status: res.status }), res.status, daten);
     const offen = OFFENE_ROUTEN.some((r) => pfad === r || pfad.startsWith(r + '?'));
-    if (res.status === 401 && !offen && App.status && App.status.angemeldet && App.abgemeldet) {
+    if (res.status === 401 && !offen && App.status && App.status.angemeldet && App.abgemeldet &&
+        !(opt && opt.antwort401 && (await nochAngemeldet()))) {
       f.abgemeldet = true; // App.abgemeldet meldet es schon — kein zweiter Toast
       App.abgemeldet();
     }
@@ -135,12 +143,18 @@ async function api(methode, pfad, rumpf, opt) {
   }
   return daten;
 }
+// Gilt die Anmeldung noch? Ohne Antwort des Servers: ja (dann zeigt die Route ihre eigene Meldung).
+async function nochAngemeldet() {
+  try { const s = await api('GET', '/api/status', undefined, { auto: true }); return !!(s && s.angemeldet); }
+  catch (e) { return true; }
+}
 
 // ---------- Meldungen ----------
+// art: 'fehler' (rot) oder 'warn' (gelb, bleibt am laengsten stehen: z.B. nur noch wenige Ersatzcodes).
 function toast(text, art) {
-  const k = el('div', { class: 'toast' + (art === 'fehler' ? ' fehler' : ''), role: 'status' }, text);
+  const k = el('div', { class: 'toast' + (art === 'fehler' || art === 'warn' ? ' ' + art : ''), role: art === 'warn' ? 'alert' : 'status' }, text);
   document.getElementById('toasts').append(k);
-  setTimeout(() => k.remove(), art === 'fehler' ? 6000 : 3200);
+  setTimeout(() => k.remove(), art === 'warn' ? 9000 : art === 'fehler' ? 6000 : 3200);
 }
 function fehlerToast(e) {
   if (e && e.abgemeldet) return;
@@ -198,7 +212,10 @@ function ebenenAlleZu() {
 
 // ---------- Dialoge ----------
 const dialogStapel = [];
-function dialog({ titel, inhalt, knoepfe, breit, beimSchliessen, schliessbar = true }) {
+// feld (optional): Was beim Oeffnen den Fokus bekommt (Desktop) statt des ersten Eingabefelds —
+// ein Element oder eine Funktion (Dialog) => Element, die nach dem Einhaengen laeuft (Masse
+// stimmen dann). null: der Dialog selbst, z.B. wenn der Anfang sichtbar bleiben soll.
+function dialog({ titel, inhalt, knoepfe, breit, beimSchliessen, schliessbar = true, feld }) {
   const wurzel = document.getElementById('modal-wurzel');
   const schleier = el('div', { class: 'schleier' });
   const fuss = knoepfe && knoepfe.length ? el('div', { class: 'dialog-fuss' }, knoepfe) : null;
@@ -229,8 +246,10 @@ function dialog({ titel, inhalt, knoepfe, breit, beimSchliessen, schliessbar = t
   wurzel.append(schleier, d);
   dialogStapel.push(eintrag);
   // Fokus in den Dialog holen, sonst gehen Enter und Tippen an das Terminal dahinter.
-  const erstes = d.querySelector('input:not([type=checkbox]):not([type=file]):not([type=hidden]), select, textarea');
+  const erstes = feld === undefined ? d.querySelector('input:not([type=checkbox]):not([type=file]):not([type=hidden]), select, textarea')
+    : typeof feld === 'function' ? feld(d) : feld;
   if (erstes && !App.istTelefon()) setTimeout(() => { if (offen && !d.contains(document.activeElement)) erstes.focus(); }, 30);
+  else if (feld !== undefined) d.focus({ preventScroll: true });
   else {
     // Ohne Eingabefeld: Hauptknopf (Enter bestaetigt). Bei gefaehrlichen Aktionen nur den Dialog
     // selbst — Enter loest dort nichts aus, Escape bricht ab. Telefon: immer der Dialog selbst (ohne
@@ -285,6 +304,41 @@ function eingabe(label, { titel, wert = '', hinweis, passwort = false, ok = t('b
     });
     setTimeout(() => inp.focus(), 40);
   });
+}
+
+// Feld fuer den Code der Zwei-Faktor-Anmeldung (Anmelden, Einstellungen). Zwei Arten:
+// - 6 Ziffern aus der Authenticator-App: Ziffernblock auf dem Telefon, andere Zeichen fallen weg
+//   (auch beim Einfuegen von «123 456»); mit der 6. Ziffer laeuft beiVoll() (z.B. Absenden).
+// - Ersatzcode XXXX-XXXX: Texttastatur, Grossbuchstaben; der Server ignoriert Leerzeichen und Striche.
+// Ergebnis: { input, ersatz(an), istErsatz(), wert(), voll() }.
+function codeFeld(id, beiVoll) {
+  const input = el('input', { id, type: 'text', class: 'code-feld', spellcheck: 'false' });
+  let ersatz = false;
+  const f = {
+    input,
+    istErsatz: () => ersatz,
+    wert: () => input.value.trim(),
+    voll: () => (ersatz ? input.value.replace(/[\s-]/g, '').length >= 8 : input.value.length === 6),
+    ersatz(an) {
+      ersatz = !!an;
+      input.value = '';
+      input.removeAttribute('aria-invalid');
+      input.classList.toggle('ersatz', ersatz);
+      input.setAttribute('inputmode', ersatz ? 'text' : 'numeric');
+      input.setAttribute('autocomplete', ersatz ? 'off' : 'one-time-code');
+      input.setAttribute('autocapitalize', ersatz ? 'characters' : 'off');
+      input.placeholder = ersatz ? 'XXXX-XXXX' : '000000';
+    },
+  };
+  input.addEventListener('input', () => {
+    input.removeAttribute('aria-invalid');
+    if (ersatz) return;
+    const z = input.value.replace(/\D/g, '').slice(0, 6);
+    if (z !== input.value) input.value = z;
+    if (z.length === 6 && beiVoll) beiVoll();
+  });
+  f.ersatz(false);
+  return f;
 }
 
 // Kontextmenue: am Element (Desktop) oder als Blatt unten (Telefon).

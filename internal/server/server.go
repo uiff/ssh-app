@@ -68,9 +68,23 @@ type Server struct {
 	anmeldung map[string]time.Time // Token -> letzte Bedienung
 	fehler    map[string]*fehlversuch
 
-	// kopfMu: Einrichten, Einspielen, Zuruecksetzen und Passwort aendern ersetzen den
+	// kopfMu: Einrichten, Einspielen, Zuruecksetzen, Passwort aendern, die Zwei-Faktor-
+	// Einstellungen und der Abschluss einer Anmeldung (Ersatzcode verbraucht) ersetzen den
 	// Tresor-Kopf und laufen nacheinander.
 	kopfMu sync.Mutex
+
+	// Zwei-Faktor-Anmeldung (zweitfaktor.go). tfMu schuetzt die tf-Felder und wird nie
+	// gehalten, waehrend s.mu oder der Tresor gesperrt werden.
+	tfMu           sync.Mutex
+	tfSchritt      int64                            // zuletzt angenommener TOTP-Zeitschritt
+	tfVerbrannt    map[verbrannterSchritt]time.Time // durch den Uhrzeit-Hinweis verbrannt -> gilt bis
+	tfFehlerFolge  int                              // falsche zweite Faktoren seit dem letzten richtigen (kontoweit)
+	tfSperren      int                              // kontoweite Sperren seit dem letzten richtigen zweiten Faktor
+	tfSperreBis    time.Time                        // bis dahin keine Codes aus der App (kontoweit)
+	tfFehlerMelden int                              // falsche zweite Faktoren seit der letzten Anmeldung
+	tfAlarm        bool                             // die kontoweite Sperre hat seit der letzten Anmeldung gegriffen
+	tfAusstehend   map[string]ausstehend            // Token -> begonnene Einrichtung
+	uhr            func() time.Time                 // nil = time.Now (Tests setzen eine feste Uhr)
 
 	argon   chan struct{} // begrenzt gleichzeitige Argon2-Ableitungen (je 64 MiB)
 	wartend atomic.Int32  // Anfragen, die auf einen Argon2-Platz warten oder rechnen
@@ -100,6 +114,7 @@ func Neu(st *store.Store, tr *vault.Tresor, tm *term.Manager, hilfe *help.Index,
 	}
 	s := &Server{st: st, tr: tr, tm: tm, hilfe: hilfe, opt: opt,
 		anmeldung: map[string]time.Time{}, fehler: map[string]*fehlversuch{},
+		tfAusstehend: map[string]ausstehend{}, tfVerbrannt: map[verbrannterSchritt]time.Time{},
 		argon: make(chan struct{}, 2), stop: make(chan struct{}), mux: http.NewServeMux(),
 		schnittstellen: schnittstellenNetze}
 	s.routen()
@@ -207,6 +222,10 @@ func (s *Server) routen() {
 	}
 	a("POST /api/abmelden", s.abmelden)
 	a("POST /api/passwort", s.passwortAendern)
+	a("POST /api/zweitfaktor/beginnen", s.zweitfaktorBeginnen)
+	a("POST /api/zweitfaktor/einschalten", s.zweitfaktorEinschalten)
+	a("POST /api/zweitfaktor/ausschalten", s.zweitfaktorAusschalten)
+	a("POST /api/zweitfaktor/ersatzcodes", s.ersatzcodesErneuern)
 	a("GET /api/sicherung", s.sicherungLaden)
 	a("POST /api/sicherung", s.einspielenAngemeldet)
 
@@ -345,6 +364,7 @@ func (s *Server) alleAbmelden() {
 	s.mu.Lock()
 	s.anmeldung = map[string]time.Time{}
 	s.mu.Unlock()
+	s.ausstehendVergessen("")
 	s.tr.Sperren()
 }
 
@@ -372,6 +392,7 @@ func (s *Server) leerlaufWache() {
 			}
 		}
 		s.mu.Unlock()
+		s.ausstehendAufraeumen()
 		if leer && s.tr.Offen() {
 			s.tr.Sperren()
 			log.Printf("Tresor nach Leerlauf gesperrt")
@@ -527,8 +548,15 @@ const (
 	versuchRichtig
 )
 
-// dauerText: Restdauer einer Sperre, aufgerundet («15 min», «40 s»).
+// dauerText: Restdauer einer Sperre, aufgerundet («40 s», «15 min», ueber 2 Stunden «23 h 5 min»).
 func dauerText(d time.Duration) string {
+	if d > 2*time.Hour {
+		m := int((d + time.Minute - 1) / time.Minute)
+		if m%60 == 0 {
+			return strconv.Itoa(m/60) + " h"
+		}
+		return strconv.Itoa(m/60) + " h " + strconv.Itoa(m%60) + " min"
+	}
 	if d > time.Minute {
 		return strconv.Itoa(int((d+time.Minute-1)/time.Minute)) + " min"
 	}
@@ -649,6 +677,11 @@ func (s *Server) status(w http.ResponseWriter, r *http.Request) {
 	if angemeldet {
 		antwort["benutzer"] = s.tr.Benutzer()
 		antwort["leerlaufMin"] = int(s.opt.Leerlauf.Minutes())
+		aktiv := s.tr.ZweitfaktorAktiv()
+		antwort["zweitfaktor"] = aktiv
+		if aktiv {
+			antwort["ersatzcodesUebrig"] = max(0, s.tr.ErsatzcodesUebrig())
+		}
 	}
 	jsonAntwort(w, http.StatusOK, antwort)
 }
@@ -657,6 +690,7 @@ type zugangsdaten struct {
 	Benutzer   string `json:"benutzer"`
 	Passwort   string `json:"passwort"`
 	Schluessel string `json:"schluessel"`
+	Code       string `json:"code"` // zweiter Faktor: 6 Ziffern oder ein Ersatzcode
 }
 
 func (s *Server) einrichten(w http.ResponseWriter, r *http.Request) {
@@ -712,25 +746,86 @@ func (s *Server) anmelden(w http.ResponseWriter, r *http.Request) {
 		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
+	// Zuerst Benutzer und Passwort (Argon2, teuer). Der Tresor bleibt dabei unveraendert.
+	var a *vault.Anmeldung
 	var err error
-	if e := s.mitArgon(r.Context(), func() { err = s.tr.Anmelden(strings.TrimSpace(z.Benutzer), z.Passwort) }); e != nil {
+	if e := s.mitArgon(r.Context(), func() { a, err = s.tr.AnmeldungBeginnen(strings.TrimSpace(z.Benutzer), z.Passwort) }); e != nil {
 		argonFehler(w, r, e)
 		return
 	}
+	defer a.Verwerfen()
 	if errors.Is(err, vault.ErrNichtAngelegt) {
 		fehlerAus(w, r, http.StatusConflict, err)
 		return
 	}
 	if err != nil {
+		s.anmeldungFalsch(w, r, v, err)
+		return
+	}
+	// Dann der zweite Faktor (falls eingeschaltet). Erst wenn er stimmt, entsperrt der
+	// Tresor; ein verbrauchter Ersatzcode wird dabei gespeichert.
+	ersatz := false
+	s.kopfMu.Lock()
+	ab, err := a.Abschliessen(s.pruefer(z.Code, &ersatz), s.kopfSpeichern)
+	s.kopfMu.Unlock()
+	switch {
+	case errors.Is(err, vault.ErrZweitfaktorFehlt):
+		// Passwort stimmt, der Code fehlt: neutral, die Oberflaeche fragt nach dem Code.
+		zweitfaktorAntwort(w, r, http.StatusUnauthorized, err)
+		return
+	case istCodeFehler(err):
 		v.falsch()
-		log.Printf("Fehlgeschlagene Anmeldung von %s", s.clientIP(r))
-		fehlerAus(w, r, http.StatusUnauthorized, err)
+		log.Printf("Fehlgeschlagene Anmeldung von %s (zweiter Faktor)", s.clientIP(r))
+		zweitfaktorAntwort(w, r, http.StatusUnauthorized, err)
+		return
+	case istCodeSperre(err):
+		// Kontoweite Sperre fuer Codes aus der App (zu viele falsche Codes): Ersatzcodes gelten.
+		log.Printf("Anmeldung von %s: Code aus der App abgelehnt (kontoweite Sperre)", s.clientIP(r))
+		zweitfaktorAntwort(w, r, http.StatusTooManyRequests, err)
+		return
+	case errors.Is(err, vault.ErrFalsch):
+		// Der Kopf wurde zwischendurch ersetzt und das Passwort gilt nicht mehr.
+		s.anmeldungFalsch(w, r, v, err)
+		return
+	case errors.Is(err, vault.ErrNichtAngelegt):
+		fehlerAus(w, r, http.StatusConflict, err)
+		return
+	case err != nil:
+		log.Printf("Anmeldung abschliessen: %v", err)
+		var m *texte.Meldung
+		if !errors.As(err, &m) {
+			err = texte.Neu("server.speichern.fehlgeschlagen")
+		}
+		fehlerAus(w, r, http.StatusInternalServerError, err)
 		return
 	}
 	v.richtig()
-	log.Printf("Anmeldung von %s", s.clientIP(r))
+	antwort := map[string]any{"ok": true}
+	// Falsche Codes (mit richtigem Passwort) seit der letzten Anmeldung: dem Besitzer sagen, auch
+	// wenn die Zwei-Faktor-Anmeldung inzwischen aus ist. codeAlarm: Die Codes aus der App waren
+	// deshalb gesperrt.
+	if alarm, n := s.codeWarnungAbholen(); alarm || n >= codeFehlerMelden {
+		antwort["codeFehler"] = n
+		if alarm {
+			antwort["codeAlarm"] = true
+		}
+	}
+	if ersatz {
+		log.Printf("Anmeldung von %s mit Ersatzcode (noch %d Ersatzcodes)", s.clientIP(r), ab.ErsatzUebrig)
+		antwort["ersatzcodesUebrig"] = ab.ErsatzUebrig
+	} else {
+		log.Printf("Anmeldung von %s", s.clientIP(r))
+	}
 	s.anmeldungStarten(w)
-	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
+	jsonAntwort(w, http.StatusOK, antwort)
+}
+
+// anmeldungFalsch antwortet auf falschen Benutzer oder falsches Passwort — gleich, ob
+// die Zwei-Faktor-Anmeldung eingeschaltet ist oder nicht.
+func (s *Server) anmeldungFalsch(w http.ResponseWriter, r *http.Request, v *versuch, err error) {
+	v.falsch()
+	log.Printf("Fehlgeschlagene Anmeldung von %s", s.clientIP(r))
+	fehlerAus(w, r, http.StatusUnauthorized, err)
 }
 
 func (s *Server) abmelden(w http.ResponseWriter, r *http.Request) {
@@ -739,6 +834,7 @@ func (s *Server) abmelden(w http.ResponseWriter, r *http.Request) {
 		delete(s.anmeldung, c.Value)
 		leer := len(s.anmeldung) == 0
 		s.mu.Unlock()
+		s.ausstehendVergessen(c.Value)
 		if leer {
 			s.tr.Sperren()
 		}
@@ -762,8 +858,11 @@ func (s *Server) zuruecksetzen(w http.ResponseWriter, r *http.Request) {
 	s.kopfMu.Lock()
 	defer s.kopfMu.Unlock()
 	var kopf []byte
+	var zweitfaktorAus bool
 	var err error
-	if e := s.mitArgon(r.Context(), func() { kopf, err = s.tr.Zuruecksetzen(z.Schluessel, strings.TrimSpace(z.Benutzer), z.Passwort) }); e != nil {
+	if e := s.mitArgon(r.Context(), func() {
+		kopf, zweitfaktorAus, err = s.tr.Zuruecksetzen(z.Schluessel, strings.TrimSpace(z.Benutzer), z.Passwort)
+	}); e != nil {
 		argonFehler(w, r, e)
 		return
 	}
@@ -783,9 +882,13 @@ func (s *Server) zuruecksetzen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v.richtig()
+	s.codeBremseLeeren(true) // neues Passwort: Wer das alte kannte, kommt nicht mehr bis zum Code
 	log.Printf("Passwort mit Sicherheitsschlüssel zurückgesetzt (von %s)", s.clientIP(r))
+	if zweitfaktorAus {
+		log.Printf("Zwei-Faktor-Anmeldung mit dem Sicherheitsschlüssel entfernt (von %s)", s.clientIP(r))
+	}
 	s.alleAbmelden()
-	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
+	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true, "zweitfaktorAus": zweitfaktorAus})
 }
 
 func (s *Server) passwortAendern(w http.ResponseWriter, r *http.Request) {
@@ -822,5 +925,6 @@ func (s *Server) passwortAendern(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	v.richtig()
+	s.codeBremseLeeren(true) // neues Passwort: Wer das alte kannte, kommt nicht mehr bis zum Code
 	jsonAntwort(w, http.StatusOK, map[string]bool{"ok": true})
 }

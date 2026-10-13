@@ -16,6 +16,13 @@ i18nErgaenzen({
     'basis.spracheFrage1': 'Die Seite lädt für die andere Sprache neu. Der Bildschirm «{titel}» wird dabei getrennt und lässt sich danach nicht wieder anhängen. Offene Terminals verbinden sich von selbst wieder.',
     'basis.spracheFrage': 'Die Seite lädt für die andere Sprache neu. {n} Bildschirme werden dabei getrennt und lassen sich danach nicht wieder anhängen. Offene Terminals verbinden sich von selbst wieder.',
     'basis.spracheJa': 'Trennen und wechseln',
+    // Code der Zwei-Faktor-Anmeldung (Feld in Anmeldung und Einstellungen)
+    'basis.code.app': 'Code aus der App',
+    'basis.code.ersatz': 'Ersatzcode',
+    'basis.code.ersatzVerwenden': 'Ersatzcode verwenden',
+    'basis.code.appVerwenden': 'Code aus der App verwenden',
+    'basis.code.fehlt': 'Bitte den sechsstelligen Code aus der App eingeben',
+    'basis.code.ersatzFehlt': 'Bitte den Ersatzcode mit 8 Zeichen eingeben (XXXX-XXXX)',
   },
   en: {
     'basis.ok': 'OK',
@@ -31,5 +38,11 @@ i18nErgaenzen({
     'basis.spracheFrage1': 'The page reloads to switch languages. The screen “{titel}” will be disconnected and can’t be reattached afterwards. Open terminals reconnect automatically.',
     'basis.spracheFrage': 'The page reloads to switch languages. {n} screens will be disconnected and can’t be reattached afterwards. Open terminals reconnect automatically.',
     'basis.spracheJa': 'Disconnect and switch',
+    'basis.code.app': 'Code from the app',
+    'basis.code.ersatz': 'Backup code',
+    'basis.code.ersatzVerwenden': 'Use a backup code',
+    'basis.code.appVerwenden': 'Use a code from the app',
+    'basis.code.fehlt': 'Enter the 6-digit code from the app',
+    'basis.code.ersatzFehlt': 'Enter the 8-character backup code (XXXX-XXXX)',
   },
 });

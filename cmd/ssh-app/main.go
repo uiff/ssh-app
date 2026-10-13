@@ -33,7 +33,7 @@ import (
 	"github.com/uiff/ssh-app/internal/vault"
 )
 
-var version = "0.3.0"
+var version = "0.4.0"
 
 func env(k, standard string) string {
 	if v := strings.TrimSpace(os.Getenv(k)); v != "" {

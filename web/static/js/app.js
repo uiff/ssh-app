@@ -194,21 +194,25 @@ function sicherheitsschluesselSeite(schluessel, benutzer) {
   ersetzen(document.getElementById('app'), einstiegRahmen(inhalt));
 }
 
-function anmeldeSeite() {
-  const [b, bFeld] = formFeld('a-benutzer', t('app.feld.benutzer'), 'text', { autocomplete: 'username', value: lokal('benutzer', '') });
+// Anmelden. vorgabe: Benutzername (zurueck aus dem Code-Schritt), fehler: Meldung dazu.
+// Als Klick-Handler kommt hier ein Ereignis an: dann gilt der gemerkte Benutzername.
+function anmeldeSeite(vorgabe, fehler) {
+  const [b, bFeld] = formFeld('a-benutzer', t('app.feld.benutzer'), 'text', { autocomplete: 'username', value: typeof vorgabe === 'string' ? vorgabe : lokal('benutzer', '') });
   const [p, pFeld] = formFeld('a-pw', t('app.feld.passwort'), 'password', { autocomplete: 'current-password' });
-  const meldung = el('div');
+  const meldung = el('div', { 'aria-live': 'assertive' });
   const knopf = el('button', { class: 'btn primaer voll', type: 'submit' }, t('app.anmelden.knopf'));
   const form = el('form', { style: { display: 'flex', flexDirection: 'column', gap: '18px' }, onsubmit: async (e) => {
     e.preventDefault();
     ersetzen(meldung);
     knopf.disabled = true; knopf.textContent = t('app.anmelden.laeuft');
+    const benutzer = b.value.trim(), passwort = p.value;
     try {
-      await api('POST', '/api/anmelden', { benutzer: b.value.trim(), passwort: p.value });
-      lokalSetzen('benutzer', b.value.trim());
-      App.starten();
+      anmeldungFertig(benutzer, await api('POST', '/api/anmelden', { benutzer, passwort }));
     } catch (err) {
-      meldung.append(el('div', { class: 'meldung fehler' }, err.message));
+      // Passwort richtig, Zwei-Faktor-Anmeldung eingeschaltet: weiter zum Code (der Server hat
+      // noch nichts entsperrt). Ein falsches Passwort meldet der Server wie immer.
+      if (err.daten && err.daten.zweitfaktor) { p.value = ''; codeSchritt(benutzer, passwort); return; }
+      meldung.append(el('div', { class: 'meldung fehler' }, err.message)); // meldung ist aria-live
       knopf.disabled = false; knopf.textContent = t('app.anmelden.knopf');
       p.select();
     }
@@ -218,8 +222,88 @@ function anmeldeSeite() {
     bFeld, pFeld, meldung, knopf,
     el('button', { class: 'textlink', type: 'button', onclick: zuruecksetzenSeite }, t('app.anmelden.vergessen')),
     el('p', { style: { margin: 0, fontSize: '13px', color: 'var(--leise)', lineHeight: 1.5 } }, t('app.anmelden.sperre')));
+  if (fehler) meldung.append(el('div', { class: 'meldung fehler', role: 'alert' }, fehler));
   ersetzen(document.getElementById('app'), einstiegRahmen(form, true));
   if (!App.istTelefon()) (b.value ? p : b).focus();
+}
+
+// Nach der Anmeldung: Benutzername merken; wurde ein Ersatzcode verbraucht, den Rest melden
+// (ab 2 verbliebenen deutlich, damit rechtzeitig neue entstehen).
+function anmeldungFertig(benutzer, r) {
+  lokalSetzen('benutzer', benutzer);
+  // Seit der letzten Anmeldung gab es falsche Codes mit richtigem Passwort (der Server meldet sie
+  // ab 3), bei codeAlarm so viele, dass die Codes aus der App gesperrt waren: Wer das war, kennt
+  // vermutlich das Passwort.
+  const falsch = r && typeof r.codeFehler === 'number' ? r.codeFehler : 0;
+  if (r && r.codeAlarm) toast(t('app.code.alarm', { n: falsch }), 'warn');
+  else if (falsch > 0) toast(t('app.code.fehler', { n: falsch }), 'warn');
+  const n = r && typeof r.ersatzcodesUebrig === 'number' ? r.ersatzcodesUebrig : -1;
+  if (n === 0) toast(t('app.code.ersatzLetzter'), 'warn');
+  else if (n === 1) toast(t('app.code.ersatzWenig1'), 'warn');
+  else if (n === 2) toast(t('app.code.ersatzWenig', { n }), 'warn');
+  else if (n > 2) toast(t('app.code.ersatzRest', { n }));
+  App.starten();
+}
+
+// Zweiter Schritt der Anmeldung (Zwei-Faktor): Code aus der Authenticator-App oder Ersatzcode.
+// Das Passwort liegt nur in dieser Funktion (Variable) und geht mit dem Code noch einmal mit.
+function codeSchritt(benutzer, passwort) {
+  const meldung = el('div', { 'aria-live': 'assertive' });
+  const knopf = el('button', { class: 'btn primaer voll', type: 'submit' }, t('app.code.knopf'));
+  const code = codeFeld('a-code', () => pruefen());
+  const label = el('label', { for: 'a-code' }, t('basis.code.app'));
+  const text = el('p', { class: 'unter' }, t('app.code.text'));
+  // Ohne Telefon: Ersatzcode; sind auch die aufgebraucht, bleibt der Sicherheitsschluessel.
+  const verloren = el('div', { class: 'code-verloren versteckt' },
+    el('p', { class: 'code-hinweis' }, t('app.code.verloren')),
+    el('button', { class: 'textlink', type: 'button', onclick: zuruecksetzenSeite }, t('app.code.zuruecksetzen')));
+  const wechsel = el('button', { class: 'textlink', type: 'button', onclick: () => {
+    const ersatz = !code.istErsatz();
+    code.ersatz(ersatz);
+    label.textContent = t(ersatz ? 'basis.code.ersatz' : 'basis.code.app');
+    text.textContent = t(ersatz ? 'app.code.textErsatz' : 'app.code.text');
+    wechsel.textContent = t(ersatz ? 'basis.code.appVerwenden' : 'basis.code.ersatzVerwenden');
+    verloren.classList.toggle('versteckt', !ersatz);
+    ersetzen(meldung);
+    code.input.focus(); // Klick: oeffnet auf dem Telefon gleich die passende Tastatur
+  } }, t('basis.code.ersatzVerwenden'));
+  const fehlerZeigen = (text) => {
+    ersetzen(meldung, el('div', { class: 'meldung fehler' }, text)); // meldung ist aria-live
+    code.input.setAttribute('aria-invalid', 'true');
+    // Telefon: ohne Fokus (die Tastatur bleibt, wie sie ist) die Meldung in den Blick holen.
+    if (App.istTelefon()) meldung.scrollIntoView({ block: 'nearest' });
+  };
+  let laeuft = false;
+  async function pruefen() {
+    if (laeuft) return;
+    ersetzen(meldung);
+    if (!code.voll()) { fehlerZeigen(t(code.istErsatz() ? 'basis.code.ersatzFehlt' : 'basis.code.fehlt')); return; }
+    laeuft = true; knopf.disabled = true; knopf.textContent = t('app.anmelden.laeuft');
+    try {
+      const r = await api('POST', '/api/anmelden', { benutzer, passwort, code: code.wert() });
+      passwort = '';
+      anmeldungFertig(benutzer, r);
+    } catch (err) {
+      laeuft = false; knopf.disabled = false; knopf.textContent = t('app.code.knopf');
+      // 401 ohne «zweitfaktor»: Das Passwort gilt nicht mehr (inzwischen geaendert) — zurueck zu Schritt 1.
+      if (err.status === 401 && !(err.daten && err.daten.zweitfaktor)) { passwort = ''; anmeldeSeite(benutzer, err.message); return; }
+      // Falscher Code, Zeitabweichung, Sperre: Text des Servers. Das Feld bleibt im Fokus (Telefon:
+      // die Tastatur bleibt offen), der Code muss ohnehin neu.
+      code.input.value = '';
+      fehlerZeigen(err.message);
+      if (!App.istTelefon()) code.input.focus();
+    }
+  }
+  const form = el('form', { style: { display: 'flex', flexDirection: 'column', gap: '18px' }, onsubmit: (e) => { e.preventDefault(); pruefen(); } },
+    el('h2', null, t('app.code.titel')),
+    text,
+    el('div', { class: 'feld' }, label, code.input),
+    meldung, knopf,
+    el('div', { class: 'code-links' }, wechsel,
+      el('button', { class: 'textlink', type: 'button', onclick: () => { passwort = ''; anmeldeSeite(benutzer); } }, t('app.code.zurueck'))),
+    verloren);
+  ersetzen(document.getElementById('app'), einstiegRahmen(form, true));
+  if (!App.istTelefon()) code.input.focus();
 }
 
 function zuruecksetzenSeite() {
@@ -233,16 +317,20 @@ function zuruecksetzenSeite() {
     ersetzen(meldung);
     if (p1.value !== p2.value) { meldung.append(el('div', { class: 'meldung fehler' }, t('app.pwUngleich'))); return; }
     try {
-      await api('POST', '/api/zuruecksetzen', { schluessel: k.value, benutzer: b.value.trim(), passwort: p1.value });
+      const r = await api('POST', '/api/zuruecksetzen', { schluessel: k.value, benutzer: b.value.trim(), passwort: p1.value });
       lokalSetzen('benutzer', b.value.trim());
-      toast(t('app.zurueck.ok'));
+      // Der Sicherheitsschluessel schaltet eine Zwei-Faktor-Anmeldung aus (Telefon verloren).
+      if (r && r.zweitfaktorAus) toast(t('app.zurueck.okZweitfaktor'), 'warn');
+      else toast(t('app.zurueck.ok'));
       App.starten();
-    } catch (err) { meldung.append(el('div', { class: 'meldung fehler' }, err.message)); }
+    } catch (err) { meldung.append(el('div', { class: 'meldung fehler', role: 'alert' }, err.message)); }
   } },
     el('h2', null, t('app.zurueck.titel')),
     el('p', { class: 'unter' }, t('app.zurueck.text')),
     el('div', { class: 'feld' }, el('label', { for: 'r-key' }, t('app.schluessel.name')), k),
-    bFeld, p1Feld, p2Feld, meldung,
+    bFeld, p1Feld, p2Feld,
+    el('p', { class: 'code-hinweis' }, t('app.zurueck.zweitfaktor')),
+    meldung,
     el('button', { class: 'btn primaer voll', type: 'submit' }, t('app.zurueck.knopf')),
     el('button', { class: 'textlink', type: 'button', onclick: anmeldeSeite }, t('app.zurueck.zurAnmeldung')));
   ersetzen(document.getElementById('app'), einstiegRahmen(form, true));

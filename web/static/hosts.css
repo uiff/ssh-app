@@ -260,6 +260,34 @@ input.schalter:checked::before { transform: translateX(18px); background: var(--
 .sprach-knopf[aria-pressed=true] { border-color: var(--text2); background: var(--flaeche2); color: var(--text); font-weight: 600; }
 .sprach-knopf[aria-pressed=true] .sprach-kuerzel { background: var(--akzent); color: var(--akzent-text); }
 
+/* ---------- Einstellungen: Zwei-Faktor-Anmeldung (js/zugang.js) ---------- */
+.tf-stand { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--gut-hell); }
+.tf-stand.tf-aus { color: var(--leise); font-weight: 500; }
+.tf-stand.tf-wenig { color: var(--warn); }
+.tf-form { display: flex; flex-direction: column; gap: 18px; }
+.tf-text { margin: 0; color: var(--text2); line-height: 1.5; }
+.tf-schritt { display: flex; flex-direction: column; gap: 14px; }
+.tf-schritt + .tf-schritt { padding-top: 18px; border-top: 1px solid var(--linie); }
+.tf-schritt-kopf { display: flex; align-items: flex-start; gap: 10px; line-height: 1.5; font-weight: 500; }
+.tf-nr { display: inline-flex; align-items: center; justify-content: center; flex: none; width: 24px; height: 24px; border-radius: 50%; background: var(--akzent); color: var(--akzent-text); font-size: 13px; font-weight: 700; }
+/* QR-Code immer schwarz auf weiss (Kameras lesen ihn so am besten), mit Ruhezone aus dem SVG */
+.tf-teil { display: flex; flex-direction: column; gap: 14px; }
+.tf-teil-rechts { display: flex; flex-direction: column; gap: 12px; min-width: 0; }
+@media (min-width: 900px) {
+  .tf-teil { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 20px; align-items: start; }
+}
+.tf-qr { align-self: center; padding: 8px; border-radius: 12px; background: #FFFFFF; line-height: 0; }
+@media (min-width: 900px) { .tf-qr { align-self: start; } }
+.tf-qr img { display: block; width: 200px; height: 200px; image-rendering: pixelated; }
+.tf-oeffnen { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; }
+.tf-schluessel { padding: 12px 14px; border-radius: 8px; background: var(--term); border: 1px solid var(--linie); font-family: var(--mono); font-size: 16px; line-height: 1.6; letter-spacing: .04em; word-spacing: .15em; overflow-wrap: anywhere; user-select: all; }
+.tf-uhr { display: flex; align-items: center; gap: 8px; font-size: 13.5px; color: var(--text2); }
+.tf-uhr b { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+.tf-uhr svg.ic { color: var(--leise); }
+/* Ersatzcodes: zwei Spalten, Festbreitenschrift, wie der Sicherheitsschluessel umrandet */
+.tf-codes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 16px; padding: 14px 16px; border-radius: var(--radius); background: var(--term); border: 1px solid var(--akzent); font-family: var(--mono); font-size: 17px; letter-spacing: .04em; user-select: all; }
+.tf-codes span { text-align: center; white-space: nowrap; }
+
 /* ---------- Telefon ---------- */
 @media (max-width: 899px) {
   .host-zeile > .zeile { min-height: 56px; }

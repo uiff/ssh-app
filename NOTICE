@@ -90,6 +90,10 @@ Program (Go, statically linked; "go version -m ssh-app" shows the same list)
 - github.com/dustin/go-humanize v1.0.1 — MIT
   Copyright (c) 2005-2008 Dustin Sallings
   Text: go-github.com-dustin-go-humanize.LICENSE
+- rsc.io/qr v0.2.0 — BSD-3-Clause
+  Copyright (c) 2009 The Go Authors
+  Creates the QR code shown when two-factor sign-in is set up.
+  Text: go-rsc.io-qr.LICENSE
 
 Data
 ----

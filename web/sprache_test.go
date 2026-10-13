@@ -476,15 +476,19 @@ func TestTextSchluesselImKatalog(t *testing.T) {
 			t.Errorf("%s:%d: Schluessel %s wird nirgends benutzt", e.datei, e.zeile, s)
 		}
 	}
-	// Der Klicktest klickt ueber Katalogschluessel (klickT): auch die muessen stimmen.
-	if b, err := os.ReadFile("../tools/klicktest.js"); err == nil {
+	// Die Klicktests klicken ueber Katalogschluessel (klickT): auch die muessen stimmen.
+	for _, datei := range []string{"tools/klicktest.js", "tools/zweifaktor-test.js"} {
+		b, err := os.ReadFile("../" + datei)
+		if err != nil {
+			continue
+		}
 		toks, err := jsZerlegen(string(b))
 		if err != nil {
-			t.Fatalf("tools/klicktest.js: %v", err)
+			t.Fatalf("%s: %v", datei, err)
 		}
 		for _, tk := range toks {
 			if tk.art == 's' && schluesselRe.MatchString(tk.wert) && !strings.HasSuffix(tk.wert, ".") && !k.hat("de", tk.wert) {
-				t.Errorf("tools/klicktest.js:%d: Schluessel %s fehlt im Katalog", tk.zeile, tk.wert)
+				t.Errorf("%s:%d: Schluessel %s fehlt im Katalog", datei, tk.zeile, tk.wert)
 			}
 		}
 	}

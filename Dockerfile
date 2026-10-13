@@ -18,7 +18,7 @@ ARG GO_VERSION=1.26
 FROM --platform=$BUILDPLATFORM golang:${GO_VERSION}-alpine AS bau
 ARG TARGETOS
 ARG TARGETARCH
-ARG VERSION=0.3.0
+ARG VERSION=0.4.0
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download

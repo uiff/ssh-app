@@ -18,6 +18,7 @@
 - **Remote screen (VNC)** — RealVNC-style viewer next to your terminals. Tunneled **over SSH by default** (encrypted, no open VNC port on the device), or direct for panels without SSH. The VNC password stays on the server.
 - **Files (SFTP)** — upload, download, rename, delete. On Linux hosts the file panel **follows your `cd`** in the terminal.
 - **Encrypted vault** — passwords and private keys are stored encrypted (AES-256-GCM, key derived from your sign-in password with Argon2id). Generate ed25519 keys and install them on a host with one click.
+- **Optional two-factor sign-in** — 6-digit codes from an authenticator app (TOTP) plus 10 one-time backup codes. Off by default, turned on in Settings, works fully offline.
 - **Command help, offline** — about 7,000 commands from tldr-pages (English and German). Search in plain words (“extract archive”, “port in use”); Keyway explains the line you are typing, flag by flag.
 - **Device types** — icons for PLC, HMI, gateway, server, VM, container, Raspberry Pi, router, switch, firewall, NAS and more, so you see at a glance what you connect to.
 - **Made for the phone** — extra key row (Esc, Tab, Ctrl, Alt, arrows), dialogs that stay above the on-screen keyboard, touch gestures and zoom on the VNC screen.
@@ -94,7 +95,7 @@ In the host dialog, open **Advanced → Screen (VNC)** and switch it on.
 | Tag | Meaning |
 |---|---|
 | `latest` | latest release |
-| `0.3.0`, `0.3` | exact release / latest patch of a minor version |
+| `0.4.0`, `0.4` | exact release / latest patch of a minor version |
 
 Images are built for **`linux/amd64`** and **`linux/arm64`** (Raspberry Pi 4/5, industrial ARM controllers). Docker pulls the right one automatically.
 
@@ -155,6 +156,7 @@ The proxy must pass WebSockets (`/api/ws`, `/api/vnc`), keep the Host header (or
 ## Security
 
 - Sign-in lockout after 5 failed attempts (15 minutes per address), `HttpOnly` + `SameSite=Strict` cookies, CSRF header, strict Content-Security-Policy.
+- Optional two-factor sign-in (TOTP): the vault unlocks only with password and code; each code works once, and wrong codes count toward the lockout. After 10 wrong codes in a row, from any addresses and however slowly, codes from the app are refused for 15 minutes, twice as long with each further lock up to 24 hours (backup codes still work); the next sign-in tells you how many wrong codes were entered.
 - Secrets are stored encrypted; the key exists only in memory while someone is signed in. To connect, the server has to decrypt a secret briefly — end-to-end encryption into the browser is not possible for an SSH gateway.
 - SSH host keys are confirmed on first connect; a changed key is shown as a clear warning.
 - Keyway is meant for your own network. **Do not expose it to the internet without protection.**

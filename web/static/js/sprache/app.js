@@ -54,6 +54,21 @@ i18nErgaenzen({
     'app.anmelden.vergessen': 'Passwort vergessen? Mit Sicherheitsschlüssel zurücksetzen',
     'app.anmelden.sperre': 'Nach 5 Fehlversuchen ist die Anmeldung von diesem Gerät 15 Minuten gesperrt.',
 
+    // Anmelden, zweiter Schritt (Zwei-Faktor-Anmeldung eingeschaltet)
+    'app.code.titel': 'Code eingeben',
+    'app.code.text': 'Öffne deine Authenticator-App und gib den sechsstelligen Code für Keyway ein.',
+    'app.code.textErsatz': 'Gib einen deiner Ersatzcodes ein. Jeder Code funktioniert nur einmal.',
+    'app.code.knopf': 'Bestätigen',
+    'app.code.zurueck': 'Zurück zu Benutzername und Passwort',
+    'app.code.verloren': 'Kein Telefon und keine Ersatzcodes mehr? Setze das Passwort mit dem Sicherheitsschlüssel zurück — das schaltet die Zwei-Faktor-Anmeldung aus.',
+    'app.code.zuruecksetzen': 'Mit dem Sicherheitsschlüssel zurücksetzen',
+    'app.code.ersatzRest': 'Mit einem Ersatzcode angemeldet. Noch {n} Ersatzcodes übrig.',
+    'app.code.ersatzWenig': 'Mit einem Ersatzcode angemeldet. Nur noch {n} Ersatzcodes übrig — erzeuge bald neue in den Einstellungen.',
+    'app.code.ersatzWenig1': 'Mit einem Ersatzcode angemeldet. Nur noch 1 Ersatzcode übrig — erzeuge bald neue in den Einstellungen.',
+    'app.code.ersatzLetzter': 'Mit dem letzten Ersatzcode angemeldet. Erzeuge jetzt neue in den Einstellungen.',
+    'app.code.alarm': 'Seit der letzten Anmeldung wurden {n} falsche Codes eingegeben, jedes Mal mit dem richtigen Passwort, und die Codes aus der App waren deshalb eine Zeit lang gesperrt. Wer das war, kennt vermutlich dein Passwort — ändere es in den Einstellungen.',
+    'app.code.fehler': 'Seit der letzten Anmeldung wurden {n} falsche Codes eingegeben, jedes Mal mit dem richtigen Passwort. Falls das nicht du warst, kennt jemand dein Passwort — ändere es in den Einstellungen.',
+
     // Passwort zuruecksetzen
     'app.zurueck.titel': 'Passwort zurücksetzen',
     'app.zurueck.text': 'Mit dem Sicherheitsschlüssel aus der Einrichtung. Deine Hosts und Zugänge bleiben erhalten.',
@@ -62,6 +77,8 @@ i18nErgaenzen({
     'app.zurueck.pw2': 'Neues Passwort wiederholen',
     'app.zurueck.knopf': 'Passwort setzen',
     'app.zurueck.ok': 'Passwort neu gesetzt — bitte anmelden',
+    'app.zurueck.okZweitfaktor': 'Passwort neu gesetzt und Zwei-Faktor-Anmeldung ausgeschaltet — bitte anmelden. Lösche den alten Eintrag «Keyway» in der Authenticator-App und richte sie in den Einstellungen neu ein.',
+    'app.zurueck.zweitfaktor': 'Ist die Zwei-Faktor-Anmeldung eingeschaltet, wird sie dabei ausgeschaltet. Du kannst sie danach in den Einstellungen neu einrichten.',
     'app.zurueck.zurAnmeldung': 'Zurück zur Anmeldung',
 
     // Arbeitsplatz: Kopf und Menue
@@ -212,6 +229,20 @@ i18nErgaenzen({
     'app.anmelden.vergessen': 'Forgot your password? Reset it with your recovery key',
     'app.anmelden.sperre': 'After 5 failed attempts, sign-in from this device is blocked for 15 minutes.',
 
+    'app.code.titel': 'Enter code',
+    'app.code.text': 'Open your authenticator app and enter the 6-digit code for Keyway.',
+    'app.code.textErsatz': 'Enter one of your backup codes. Each code works only once.',
+    'app.code.knopf': 'Verify',
+    'app.code.zurueck': 'Back to username and password',
+    'app.code.verloren': 'No phone and no backup codes left? Reset your password with the recovery key — this turns off two-factor sign-in.',
+    'app.code.zuruecksetzen': 'Reset with your recovery key',
+    'app.code.ersatzRest': 'Signed in with a backup code. {n} backup codes left.',
+    'app.code.ersatzWenig': 'Signed in with a backup code. Only {n} backup codes left — create new ones in Settings soon.',
+    'app.code.ersatzWenig1': 'Signed in with a backup code. Only 1 backup code left — create new ones in Settings soon.',
+    'app.code.ersatzLetzter': 'Signed in with your last backup code. Create new ones in Settings now.',
+    'app.code.alarm': 'Since the last sign-in, {n} wrong codes were entered, each time with the correct password, so codes from the app were blocked for a while. Whoever did this probably knows your password — change it in Settings.',
+    'app.code.fehler': 'Since the last sign-in, {n} wrong codes were entered, each time with the correct password. If that wasn’t you, someone knows your password — change it in Settings.',
+
     'app.zurueck.titel': 'Reset password',
     'app.zurueck.text': 'Use the recovery key from setup. Your hosts and credentials are kept.',
     'app.zurueck.benutzer': 'Username (new or current)',
@@ -219,6 +250,8 @@ i18nErgaenzen({
     'app.zurueck.pw2': 'Confirm new password',
     'app.zurueck.knopf': 'Set password',
     'app.zurueck.ok': 'Password reset — please sign in',
+    'app.zurueck.okZweitfaktor': 'Password reset and two-factor sign-in turned off — please sign in. Delete the old “Keyway” entry in your authenticator app and set it up again in Settings.',
+    'app.zurueck.zweitfaktor': 'If two-factor sign-in is turned on, this turns it off. You can set it up again in Settings afterwards.',
     'app.zurueck.zurAnmeldung': 'Back to sign in',
 
     'app.kopf.hosts': 'Hosts and vault',
