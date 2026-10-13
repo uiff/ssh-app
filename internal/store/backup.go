@@ -17,6 +17,13 @@ type ZugangRoh struct {
 	PassphraseEnc []byte `json:"passphraseEnc,omitempty"`
 }
 
+// HostRoh traegt einen Host samt verschluesseltem VNC-Passwort (base64 in JSON).
+// Aeltere Sicherungen ohne VNC-Felder ergeben Hosts ohne VNC.
+type HostRoh struct {
+	Host
+	VncPasswortEnc []byte `json:"vncPasswortEnc,omitempty"`
+}
+
 // Sicherung ist der komplette Bestand. Geheimnisse bleiben verschluesselt;
 // der Tresor-Kopf reist mit, damit das Hauptpasswort sie wieder oeffnet.
 type Sicherung struct {
@@ -26,7 +33,7 @@ type Sicherung struct {
 	App        string          `json:"app"`
 	TresorKopf []byte          `json:"tresorKopf"`
 	Ordner     []Ordner        `json:"ordner"`
-	Hosts      []Host          `json:"hosts"`
+	Hosts      []HostRoh       `json:"hosts"`
 	Zugaenge   []ZugangRoh     `json:"zugaenge"`
 	Bekannt    []BekannterHost `json:"bekannt"`
 	Snippets   []Snippet       `json:"snippets"`
@@ -41,8 +48,13 @@ func (s *Store) Exportieren(tresorKopf []byte, app string) (Sicherung, error) {
 	if sg.Ordner, err = s.Ordner(); err != nil {
 		return sg, err
 	}
-	if sg.Hosts, err = s.Hosts(); err != nil {
+	hs, err := s.Hosts()
+	if err != nil {
 		return sg, err
+	}
+	sg.Hosts = make([]HostRoh, 0, len(hs))
+	for _, h := range hs {
+		sg.Hosts = append(sg.Hosts, HostRoh{Host: h, VncPasswortEnc: h.VncPasswortEnc})
 	}
 	zs, err := s.Zugaenge()
 	if err != nil {
@@ -99,12 +111,15 @@ func (s *Store) Einspielen(sg Sicherung, kopfSchluessel string) error {
 			return err
 		}
 	}
-	for _, h := range sg.Hosts {
+	for _, hr := range sg.Hosts {
+		h := hr.Host
 		if h.Port == 0 {
 			h.Port = 22
 		}
-		if _, err := tx.Exec(`INSERT INTO host(id,name,adresse,port,benutzer,ordner_id,zugang_id,farbe,tags,pfad_folgen,notiz,geraet) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
-			h.ID, h.Name, h.Adresse, h.Port, h.Benutzer, h.OrdnerID, h.ZugangID, h.Farbe, joinTags(h.Tags), b2i(h.PfadFolgen), h.Notiz, h.Geraet); err != nil {
+		h.vncVorgaben()
+		if _, err := tx.Exec(`INSERT INTO host(id,name,adresse,port,benutzer,ordner_id,zugang_id,farbe,tags,pfad_folgen,notiz,geraet,vnc,vnc_port,vnc_weg,vnc_passwort_enc) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			h.ID, h.Name, h.Adresse, h.Port, h.Benutzer, h.OrdnerID, h.ZugangID, h.Farbe, joinTags(h.Tags), b2i(h.PfadFolgen), h.Notiz, h.Geraet,
+			b2i(h.VNC), h.VncPort, h.VncWeg, hr.VncPasswortEnc); err != nil {
 			return err
 		}
 	}

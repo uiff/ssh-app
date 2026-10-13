@@ -231,6 +231,7 @@ func (s *Server) routen() {
 	a("GET /api/sitzungen", s.sitzungen)
 	a("DELETE /api/sitzungen/{id}", s.sitzungBeenden)
 	a("GET /api/ws", s.ws)
+	a("GET /api/vnc", s.vncWS)
 	a("GET /api/sitzungen/{id}/dateien", s.dateienListe)
 	a("GET /api/sitzungen/{id}/pfad", s.dateienPfad)
 	a("GET /api/sitzungen/{id}/laden", s.dateiLaden)

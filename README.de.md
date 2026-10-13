@@ -11,7 +11,8 @@
 </p>
 
 <p align="center">
-  Ein selbst gehosteter Web-SSH-Client: Terminal, Dateien und Befehlshilfe in einem Browser-Tab, am Rechner und auf dem Telefon.
+  Ein selbst gehosteter Web-SSH-Client: Terminal, Bildschirm (VNC), Dateien und Befehlshilfe in einem Browser-Tab, am
+  Rechner und auf dem Telefon.
 </p>
 
 <p align="center">
@@ -44,6 +45,73 @@ und ohne Konto bei Dritten. Die Oberfläche gibt es auf Deutsch und Englisch.
   «An alle senden» führt der Tab, in den du tippst, die Zeile wie gewohnt aus. Auf den anderen kritischen Hosts wartet
   eine gefährliche Zeile auf deine Bestätigung, die übrigen Tabs führen sie gleich aus.
 
+### Bildschirm (VNC)
+
+<p align="center">
+  <img src="docs/bilder/de/desktop-vnc.png" width="100%" alt="Der Bildschirm eines HMI-Panels in einem Tab neben zwei Terminals, darüber die Werkzeugleiste mit Ansicht, Qualität, Nur ansehen, Zwischenablage, Sondertasten, Strg+Alt+Entf, Vollbild und Trennen; links der Host mit den Knöpfen Terminal und Bildschirm">
+</p>
+
+Wie der RealVNC Viewer, aber im Browser-Tab: den Bildschirm eines Raspberry Pi, eines HMI-Panels oder eines PCs sehen
+und bedienen. Jeder Bildschirm öffnet sich als Tab neben den Terminals, auch mehrere gleichzeitig.
+
+- **Je Host einschalten:** im Host-Dialog unter **Erweitert** den **Bildschirm (VNC)** einschalten, die Verbindung
+  wählen und den VNC-Port eintragen (meist 5900, Anzeige `:1` = 5901). Die Startseite zeigt diese Hosts dann zuoberst,
+  als Karten mit Vorschaubild und den Knöpfen Terminal und Bildschirm. In der Host-Liste bekommen sie dieselben zwei
+  Knöpfe. Ein Klick auf die Zeile öffnet das Terminal, bei einem direkt verbundenen HMI-Panel ohne
+  SSH-Zugangsdaten den Bildschirm.
+- **Über SSH getunnelt (Vorgabe, empfohlen):** Keyway meldet sich per SSH am Host an, genau wie beim Terminal (Prüfung
+  des Host-Schlüssels, Benutzername und Passwort, Zugangsdaten speichern), und verbindet sich von dort mit dem
+  VNC-Server auf dem Host selbst (`127.0.0.1:<port>`). Der Bildschirm läuft durch die verschlüsselte SSH-Verbindung, im
+  Netz muss kein VNC-Port offen sein: Der VNC-Server darf nur auf localhost lauschen. Der SSH-Server muss
+  Weiterleitungen erlauben (`AllowTcpForwarding`, bei OpenSSH von Haus aus an), sonst meldet die App das.
+- **Direkt:** für Geräte ohne SSH, etwa viele HMI-Panels. Keyway verbindet sich direkt mit `<adresse>:<port>`.
+  **Das ist unverschlüsselt:** Zwischen Keyway und dem Gerät gehen Bildschirminhalt und alle Eingaben im Klartext durchs
+  Netz, das Passwort schützt nur die schwache VNC-Abfrage (DES). Direkt deshalb nur in einem vertrauenswürdigen Netz
+  verwenden. Zwischen Browser und Keyway gilt weiterhin HTTPS.
+- **Nur das gespeicherte Ziel:** Keyway verbindet sich nur mit Adresse und Port, die beim Host gespeichert sind. Der
+  Browser kann kein anderes Ziel vorgeben.
+- **Das VNC-Passwort bleibt auf dem Server:** Du gibst es im Host-Dialog ein oder dann, wenn Keyway danach fragt. Es
+  liegt verschlüsselt im Tresor, der Host-Dialog kann es wieder entfernen. Keyway meldet sich selbst am VNC-Server an
+  (RFB 3.3, 3.7 und 3.8 mit den Sicherheitstypen None und VNC-Authentication), das Passwort kommt nie in den Browser.
+  Fehlt es oder ist es falsch, fragt Keyway nach und speichert es nur nach erfolgreicher Anmeldung und nur mit Haken bei
+  «VNC-Passwort für diesen Host speichern». VNC-Authentication verwendet nur die ersten 8 Zeichen. Nach 5 falschen
+  Passwörtern beendet Keyway die Verbindung.
+- **Andere Anmeldeverfahren reicht Keyway durch:** Bietet der VNC-Server weder None noch VNC-Authentication an (zum
+  Beispiel RealVNC Server mit seiner RSA-AES-Anmeldung, Apple Remote Desktop, UltraVNC mit MS-Logon II oder VeNCrypt mit
+  Benutzername und Passwort), reicht Keyway die Verbindung unverändert durch, und die Anmeldung läuft im Browser (noVNC).
+  Ein dort eingegebenes Passwort speichert Keyway nicht, der Anmeldedialog sagt das. Verfahren, die TLS innerhalb der
+  VNC-Verbindung brauchen (VeNCrypt mit TLS oder X.509), gehen im Browser nicht. Bei solchen Geräten den VNC-Server auf
+  VNC-Passwort umstellen und die Verschlüsselung dem SSH-Tunnel überlassen.
+- **Werkzeugleiste:**
+  - **Ansicht:** Anpassen (der ganze Bildschirm im Fenster), Originalgrösse (1:1, mit Scrollen) oder Fernauflösung (das
+    Gerät stellt seine Auflösung auf das Fenster ein, sofern sein VNC-Server das kann; sonst wird das Bild angepasst).
+  - **Qualität:** Automatisch, Hoch, Mittel oder Niedrig. Niedrige Qualität braucht auf langsamen Leitungen weniger
+    Daten.
+  - **Nur ansehen:** zuschauen, ohne Maus und Tastatur an das Gerät zu schicken.
+  - **Zwischenablage:** Text in die Zwischenablage des Geräts senden und den zuletzt auf dem Gerät kopierten Text sehen
+    und kopieren.
+  - **Sondertasten:** <kbd>Strg</kbd>+<kbd>Alt</kbd>+<kbd>Entf</kbd>, Windows-Taste, <kbd>Alt</kbd>+<kbd>Tab</kbd>, Esc,
+    Tab, Bildschirm drucken und F1 bis F12, die sonst der Browser oder der eigene Rechner abfangen würden.
+  - **Vollbild** und **Trennen.** Ein getrennter Bildschirm behält sein letztes Bild abgedunkelt und hat wie ein
+    Terminal einen Knopf «Neu verbinden».
+
+  Ansicht, Qualität und «Nur ansehen» merkt sich dieser Browser je Host.
+- **Auf dem Telefon:** Tippen klickt, langes Drücken klickt rechts, Ziehen zieht mit der Maus, mit zwei Fingern
+  scrollen. Spreizen und Zusammenziehen schickt <kbd>Strg</kbd> mit dem Mausrad, das zoomt in vielen Programmen auf dem
+  Gerät. In der Originalgrösse verschiebt **Verschieben** das Bild beim Ziehen, Tippen klickt weiterhin. Der Knopf
+  **Tastatur** holt die Bildschirmtastatur.
+- **Vorschaubilder:** ein kleines Bild des Bildschirms für Startseite und Host-Liste. Es liegt nur in diesem Browser,
+  nie auf dem Server und nicht im Backup. Aktualisiert wird es während der Verbindung alle 30 Sekunden, auch bei «Nur
+  ansehen», und beim Trennen. Weil es vertrauliche Inhalte zeigen kann, lässt sich das Speichern in den Einstellungen
+  abschalten (Vorgabe an), und die gespeicherten Bilder lassen sich löschen.
+- **Ein Bildschirm lebt so lange wie sein Tab:** Anders als Terminal-Sitzungen läuft eine VNC-Verbindung nicht auf dem
+  Server weiter. Sie endet, wenn du ihren Tab schliesst, die Seite neu lädst oder dich abmeldest (auch durch die
+  automatische Sperre). Danach den Bildschirm wieder öffnen oder im Tab «Neu verbinden» wählen.
+
+<p align="center">
+  <img src="docs/bilder/de/telefon-vnc.png" width="300" alt="Der Bildschirm eines HMI-Panels auf dem Telefon, auf die Breite angepasst, oben der Hinweis zu den Gesten, unten die Leiste mit Tastatur, Tasten, Ablage, Ansicht und Mehr">
+</p>
+
 ### Hosts mit Gerätetyp
 
 <p align="center">
@@ -55,8 +123,8 @@ und ohne Konto bei Dritten. Die Oberfläche gibt es auf Deutsch und Englisch.
   Cloud/VPS oder Drucker. So erkennst du deine Geräte in der Liste auf einen Blick.
 - **Einfacher Host-Dialog:** Sichtbar sind nur Gerätetyp, Name, Adresse, Benutzername, Passwort und Ordner. Das Adressfeld
   versteht auch `benutzer@host:port`, `ssh://…`, `ssh -p 2222 benutzer@host` oder `[fe80::1]:2222` und füllt Benutzername und
-  Port selbst aus. Port, Schlüssel oder Zugang aus dem Tresor, Tags, Farbe, Notiz und «Dateileiste folgt dem Terminal»
-  liegen unter **Erweitert**.
+  Port selbst aus. Port, Schlüssel oder Zugang aus dem Tresor, Bildschirm (VNC), Tags, Farbe, Notiz und «Dateileiste
+  folgt dem Terminal» liegen unter **Erweitert**.
 - **Ordner, Tags, Farben und Notizen.** Der Filter über der Liste sucht in Namen, Adressen, Benutzernamen, Gerätetypen
   und Tags. Passt genau ein Host, verbindet <kbd>Enter</kbd>.
 
@@ -125,6 +193,8 @@ und ohne Konto bei Dritten. Die Oberfläche gibt es auf Deutsch und Englisch.
 - **Tastenleiste** mit Esc, Tab, Strg, Alt, Pfeilen, Pos1/Ende, Bild auf/ab, <kbd>Strg</kbd>+<kbd>C</kbd>/<kbd>D</kbd>/<kbd>Z</kbd>/<kbd>R</kbd>,
   den häufigsten Sonderzeichen der Shell sowie Einfügen und Kopieren.
 - **Für die Finger gemacht:** Menü, Dateien und Hilfe öffnen als Blätter, jede Trefferfläche ist mindestens 44 px gross.
+- **Bildschirm mit den Fingern:** Gesten zum Klicken, Rechtsklicken, Ziehen und Scrollen, dazu ein Knopf für
+  die Bildschirmtastatur (siehe [Bildschirm (VNC)](#bildschirm-vnc)).
 - **Startbildschirm:** Auf dem Startbildschirm abgelegt, läuft Keyway wie eine eigene App.
 
 ### Sprache und Aussehen
@@ -138,7 +208,8 @@ und ohne Konto bei Dritten. Die Oberfläche gibt es auf Deutsch und Englisch.
 
 ### Backup
 
-- **Eine verschlüsselte Datei** mit allen Hosts, Ordnern, Zugängen, Snippets und bekannten Host-Schlüsseln. Mit dem
+- **Eine verschlüsselte Datei** mit allen Hosts (samt VNC-Einstellungen und gespeicherten VNC-Passwörtern), Ordnern,
+  Zugängen, Snippets und bekannten Host-Schlüsseln. Mit dem
   Sicherheitsschlüssel lässt sie sich auf diesem oder einem anderen System wieder einspielen. Dabei kommt auch die
   Anmeldung des gesicherten Systems zurück (siehe [Backup und Umzug](#backup-und-umzug)).
 
@@ -258,11 +329,11 @@ Das Image setzt einige Variablen selbst (Spalte «Container»). Wer das Programm
 | `SSHAPP_TLS_CERT` | – | – | Bei `SSHAPP_TLS=eigen`: Pfad zum Zertifikat (PEM, mit Zwischenzertifikaten) |
 | `SSHAPP_TLS_KEY` | – | – | Bei `SSHAPP_TLS=eigen`: Pfad zum privaten Schlüssel (PEM). Im Container muss er für den Benutzer 65532 lesbar sein |
 | `SSHAPP_COOKIE_SECURE` | – | – | `1` = Cookie nur über HTTPS (bei `SSHAPP_TLS=aus` hinter einem HTTPS-Proxy setzen) |
-| `SSHAPP_PROXY` | – | – | Adressen oder Netze vertrauenswürdiger Reverse-Proxys, durch Komma getrennt (z. B. `172.16.0.0/12` oder `10.0.0.5, fd00::/8`). Nur bei Anfragen von dort gelten `X-Forwarded-For` (Anmeldesperre je Browser statt je Proxy) und `X-Forwarded-Host` (Terminal-WebSocket) |
+| `SSHAPP_PROXY` | – | – | Adressen oder Netze vertrauenswürdiger Reverse-Proxys, durch Komma getrennt (z. B. `172.16.0.0/12` oder `10.0.0.5, fd00::/8`). Nur bei Anfragen von dort gelten `X-Forwarded-For` (Anmeldesperre je Browser statt je Proxy) und `X-Forwarded-Host` (WebSockets für Terminal und VNC) |
 | `SSHAPP_HOSTS` | – | – | Zusätzlich erlaubte Namen der App, durch Komma getrennt, `*.firma.ch` für alle Unternamen (Schutz vor DNS-Rebinding, siehe unten). Ist die Variable gesetzt, prüft die App den Namen immer, auch mit HTTPS |
-| `SSHAPP_ORIGINS` | – | – | Zusätzlich erlaubte Herkunft (`Origin`) für den Terminal-WebSocket, durch Komma getrennt, Muster wie `https://*.firma.ch`. Nur nötig, wenn ein Proxy den Host-Kopf verändert |
+| `SSHAPP_ORIGINS` | – | – | Zusätzlich erlaubte Herkunft (`Origin`) für die WebSockets von Terminal und VNC, durch Komma getrennt, Muster wie `https://*.firma.ch`. Nur nötig, wenn ein Proxy den Host-Kopf verändert |
 | `SSHAPP_HSTS` | – | – | `1` = Strict-Transport-Security senden: Browser rufen den Namen dann ein Jahr lang nur noch per HTTPS auf, auf allen Ports. Nur setzen, wenn alles unter diesem Namen HTTPS spricht |
-| `SSHAPP_LEERLAUF_MIN` | `30` | `30` | Minuten ohne Bedienung, bis die Anmeldung abläuft und der Tresor sich sperrt. Bedienung heisst Tippen im Terminal und Aktionen in der App; automatische Abfragen im Hintergrund zählen nicht. Laufende Sitzungen bleiben bestehen und lassen sich nach der Anmeldung wieder öffnen |
+| `SSHAPP_LEERLAUF_MIN` | `30` | `30` | Minuten ohne Bedienung, bis die Anmeldung abläuft und der Tresor sich sperrt. Bedienung heisst Tippen im Terminal, Eingaben auf einem VNC-Bildschirm und Aktionen in der App; automatische Abfragen im Hintergrund zählen nicht. Laufende Terminal-Sitzungen bleiben bestehen und lassen sich nach der Anmeldung wieder öffnen, VNC-Bildschirme werden getrennt |
 
 **Schutz vor DNS-Rebinding:** Eine fremde Webseite könnte ihren eigenen Namen auf die Adresse der App zeigen lassen. Deshalb
 prüft die App im HTTP-Betrieb (`SSHAPP_TLS=aus`) und immer, sobald `SSHAPP_HOSTS` gesetzt ist, unter welchem Namen sie
@@ -294,11 +365,12 @@ Netz selbst in diesem Bereich, besser nur die genaue Adresse eintragen.
 
 Was der Proxy können muss:
 
-- **WebSockets** weiterreichen (Terminal unter `/api/ws`). Der Browser schickt alle 25 Sekunden ein Lebenszeichen, die
-  üblichen Zeitlimits von 60 Sekunden reichen.
+- **WebSockets** weiterreichen (Terminal unter `/api/ws`, VNC-Bildschirm unter `/api/vnc`). Terminal und Bildschirm
+  schicken alle 25 Sekunden ein Lebenszeichen, ihnen reichen die üblichen Zeitlimits von 60 Sekunden (nginx:
+  `proxy_read_timeout`), auch einem Bildschirm, dessen Bild sich nicht ändert.
 - **Den Host-Kopf unverändert weitergeben, samt Port** (oder `X-Forwarded-Host` setzen; das gilt nur, wenn der Proxy in
   `SSHAPP_PROXY` steht). Die App lässt einen WebSocket nur zu, wenn `Origin` und `Host` übereinstimmen. Sonst öffnet sich
-  die Seite, aber kein Terminal.
+  die Seite, aber kein Terminal und kein Bildschirm.
 - **`X-Forwarded-For`** setzen, damit die Anmeldesperre den einzelnen Browser trifft und nicht alle.
 - **Grosse Uploads** zulassen. Die Dateileiste lädt Dateien beliebiger Grösse hoch, ein Backup darf bis 64 MB gross sein.
 
@@ -371,6 +443,10 @@ beim Start im Log hin.
   interne Puffer), lassen sich nicht garantiert löschen. Wer den Speicher des Prozesses lesen kann (root, Core-Dump, Swap),
   findet sie unter Umständen. Für den Verbindungsaufbau muss der Server ein Geheimnis kurz entschlüsseln. Eine
   Ende-zu-Ende-Verschlüsselung bis in den Browser ist für ein SSH-Gateway nicht möglich.
+- VNC: Über SSH läuft der Bildschirm durch die verschlüsselte SSH-Verbindung. Mit «Direkt» ist die VNC-Verbindung
+  zwischen Keyway und dem Gerät unverschlüsselt, deshalb nur in einem vertrauenswürdigen Netz verwenden. Das VNC-Passwort
+  bleibt auf dem Server: Keyway meldet sich selbst am VNC-Server an, der Browser bekommt nur das Bild. Keyway verbindet
+  sich nur mit Adresse und Port, die beim Host gespeichert sind.
 - Das Image enthält keine Shell und läuft als unprivilegierter Benutzer (65532). Die Compose-Datei setzt zusätzlich ein nur
   lesbares Dateisystem und entzieht alle Linux-Capabilities.
 - Die Ersteinrichtung ist offen, bis jemand sie erledigt. Deshalb gleich nach dem Start einrichten (siehe oben).
@@ -410,6 +486,24 @@ node --experimental-websocket tools/klicktest.js https://localhost:8443 127.0.0.
 `DATEIEN_ORDNER=<ordner>` prüft zusätzlich die Dateileiste. Das geht nur mit dem Test-SSH-Server, denn der Ordner wird
 auf deinem Rechner angelegt.
 
+Für den Bildschirm gibt es ausserdem einen **Test-VNC-Server**. Er lauscht nur auf dem eigenen Rechner (`127.0.0.1`
+oder `::1`) und zeigt ein Testbild mit laufender Uhr. Klicks malen Punkte, Tasten, Mausrad und Zwischenablage erscheinen
+im Bild.
+
+```bash
+go run ./tools/testvnc -addr 127.0.0.1:5999 -passwort geheim
+```
+
+In Keyway dazu einen Host mit der Adresse `127.0.0.1` anlegen, VNC mit Port 5999 einschalten und «Direkt» wählen. Für
+den SSH-Tunnel stattdessen den Test-SSH-Server als Host nehmen (Verbindung «Über SSH getunnelt», VNC-Port 5999): Seine
+Weiterleitung landet auf deinem Rechner. `-typ vencrypt` prüft das Durchreichen (Anmeldung im Browser), `-version 3.3`
+einen alten Server und `-bild <datei.png>` zeigt ein eigenes Bild. Läuft der Test-VNC-Server, prüft
+`tools/klicktest.js` mit `VNC_PORT=5999 VNC_PW=geheim` auch den Bildschirm-Tab (Passwort-Rückfrage, Klicks,
+Werkzeugleiste, Telefon-Tastatur, Vorschaubild).
+
+Der Bildschirm-Viewer (noVNC) schreibt nur auf Wunsch in die Browser-Konsole: im `localStorage` den Schlüssel
+`sshapp.vncProtokoll` auf `"debug"`, `"info"`, `"warn"` oder `"error"` setzen und die Seite neu laden.
+
 Für die Befehlshilfe in der Entwicklung `tldr-pages.de.zip` und `tldr-pages.en.zip` von
 <https://github.com/tldr-pages/tldr/releases> nach `./data/hilfe/` legen (bzw. nach `<SSHAPP_DATA>/hilfe/`).
 Das Image packt die Archive beim Bau selbst, aus einem festen Stand des tldr-Repositorys (`TLDR_COMMIT` im Dockerfile).
@@ -434,5 +528,6 @@ Backup-Format) tragen weiterhin den alten Namen `ssh-app`, damit bestehende Inst
 
 MIT, siehe [LICENSE](LICENSE). Drittsoftware und Daten: siehe [NOTICE](NOTICE). Die Lizenztexte aller mitgelieferten und
 ins Programm übersetzten Bibliotheken sind eingebettet und in der App unter Einstellungen › Über › Lizenzen abrufbar.
-Die Befehlshilfe stammt aus den [tldr-pages](https://github.com/tldr-pages/tldr) (CC BY 4.0). Namen und Logos «Keyway»
+Die Befehlshilfe stammt aus den [tldr-pages](https://github.com/tldr-pages/tldr) (CC BY 4.0). Der Bildschirm nutzt
+[noVNC](https://github.com/novnc/noVNC) (MPL-2.0), unverändert mitgeliefert in `web/static/vendor/novnc/`. Namen und Logos «Keyway»
 und «IoTUeli» sind Kennzeichen von IoTUeli und nicht Teil der MIT-Lizenz.

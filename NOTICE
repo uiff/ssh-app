@@ -16,6 +16,24 @@ Interface (bundled in web/static/vendor/)
   Copyright (c) 2017, 2019 The xterm.js authors
   Text: xterm-addon-fit.LICENSE, xterm-addon-web-links.LICENSE, xterm-addon-search.LICENSE,
         xterm-addon-unicode11.LICENSE
+- noVNC 1.7.0 — Mozilla Public License 2.0 (MPL-2.0)
+  Copyright (C) 2022 The noVNC authors (see novnc.AUTHORS)
+  Source: https://github.com/novnc/noVNC (taken from the npm package @novnc/novnc 1.7.0).
+  The library files (core/ and vendor/) are in web/static/vendor/novnc/, unmodified. As they are
+  JavaScript, these files are also their source code; the app serves them under /vendor/novnc/.
+  Keyway's own code only uses them and is not covered by the MPL-2.0.
+  core/crypto/des.js carries its own BSD-style notices: Copyright (C) 1999 AT&T Laboratories
+  Cambridge, Copyright (c) 1996 Widget Workshop, Inc., Copyright (C) 1996 Jef Poskanzer.
+  noVNC's LICENSE.txt (novnc.LICENSE) lists which file is under which license. BSD-2-Clause,
+  BSD-3-Clause, and OFL-1.1 apply to parts of the noVNC app that Keyway doesn't include; their
+  texts are included because LICENSE.txt lists them.
+  Text: novnc.LICENSE (LICENSE.txt), novnc-mpl-2.0.LICENSE, novnc-des.LICENSE (license header of
+        core/crypto/des.js, preceded by one line about its origin), novnc.AUTHORS,
+        novnc-bsd-2-clause.LICENSE, novnc-bsd-3-clause.LICENSE, novnc-ofl-1.1.LICENSE
+- pako (bundled with noVNC in web/static/vendor/novnc/vendor/pako/) — MIT
+  Copyright (C) 2014-2016 by Vitaly Puzrin
+  ES module version based on pako 1.0.3, unmodified as shipped with noVNC 1.7.0.
+  Text: pako.LICENSE
 - IBM Plex Sans — SIL Open Font License 1.1
   Copyright 2019 IBM Corp.
   Text: ibm-plex-sans.LICENSE
@@ -89,3 +107,8 @@ up in the program are listed by:
   go list -deps -f '{{with .Module}}{{.Path}}@{{.Version}}{{end}}' ./cmd/ssh-app | sort -u
 The test web/lizenzen_test.go fails if a license text is missing or the license page does not
 link it.
+
+When updating noVNC, replace web/static/vendor/novnc/ with the folders core/ and vendor/ of the
+new npm package @novnc/novnc, leave the files unmodified, and update the version and the license
+texts (LICENSE.txt, AUTHORS, docs/LICENSE.*, vendor/pako/LICENSE, the header of core/crypto/des.js)
+here and in web/static/vendor/licenses/.

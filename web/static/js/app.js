@@ -35,7 +35,7 @@ App.schriftSetzen = (n) => {
   if (!(n >= 9 && n <= 24)) return;
   lokalSetzen('schrift', n);
   if (App.seitenleiste && App.koerper) seitenZeichnen(); // groessere Schrift braucht mehr Platz
-  for (const tt of App.tabs) { tt.term.options.fontSize = n; tt.anpassen(); }
+  for (const tt of App.tabs) if (tt.art !== 'vnc') { tt.term.options.fontSize = n; tt.anpassen(); }
 };
 
 // Symbol von Keyway (Schluesselloch mit Prompt, wie img/keyway.svg) als Inline-SVG: Es folgt der
@@ -85,6 +85,7 @@ App.starten = async function () {
   if (App.paletteObj) { App.paletteObj.schliessen(); App.paletteObj = null; }
   for (const tt of App.tabs) tt.schliessen();
   App.tabs = [];
+  document.documentElement.classList.remove('vnc-vorn');
   App.daten = { ordner: [], hosts: [], zugaenge: [], snippets: [], bekannt: [] };
   App.rundfunk = false;
   App.rundfunkEingabe = { text: '', frei: false };
@@ -306,7 +307,8 @@ async function arbeitsplatz() {
   // Laufende Sitzungen wieder anhaengen (Neuladen, Telefon-Wechsel).
   try {
     const laufend = await api('GET', '/api/sitzungen');
-    for (const s of laufend) if (!s.beendet) App.tabs.push(new App.TerminalTab({ sitzungId: s.id, hostId: s.hostId, titel: s.titel }));
+    // Nur Terminals: Eine Bildschirm-Verbindung (VNC) endet mit ihrem Tab.
+    for (const s of laufend) if (!s.beendet && s.art !== 'vnc') App.tabs.push(new App.TerminalTab({ sitzungId: s.id, hostId: s.hostId, titel: s.titel }));
   } catch (e) { /* leer */ }
   for (const tt of App.tabs) App.terms.append(tt.element);
   App.aktivieren(App.tabs[App.tabs.length - 1] || null);
@@ -315,6 +317,7 @@ async function arbeitsplatz() {
 
 App.datenLaden = async function () {
   try { App.daten = await api('GET', '/api/daten'); } catch (e) { if (e.status !== 401) fehlerToast(e); return; }
+  if (App.vorschau) App.vorschau.aufraeumen(App.daten.hosts);
   if (App.seitenleiste) App.seitenleiste.zeichnen();
   if (App.start && !App.aktiv) startZeichnen();
 };
@@ -374,7 +377,7 @@ function zellenBreite() {
   const groesse = App.schriftGroesse();
   try {
     if (!zellenMesser) zellenMesser = (typeof OffscreenCanvas === 'function' ? new OffscreenCanvas(1, 1) : document.createElement('canvas')).getContext('2d');
-    const familie = (App.aktiv && App.aktiv.term && App.aktiv.term.options.fontFamily) || '"JBMono", ui-monospace, Menlo, monospace';
+    const familie = (App.aktiv && App.aktiv.art !== 'vnc' && App.aktiv.term.options.fontFamily) || '"JBMono", ui-monospace, Menlo, monospace';
     zellenMesser.font = groesse + 'px ' + familie;
     const b = zellenMesser.measureText('W').width;
     if (b > 0) return b;
@@ -417,7 +420,7 @@ function hauptMenue(anker) {
   const andere = SPRACHEN.find((s) => s.id !== I18N.sprache) || SPRACHEN[0];
   menue(anker, [
     App.istTelefon() ? { text: t('app.menue.suchen'), icon: 'suche', aktion: () => App.palette('') } : null,
-    App.istTelefon() && App.offeneTabs().length > 1 ? { text: App.rundfunk ? t('app.rundfunk.aus') : t('app.rundfunk.an'), icon: 'funk', aktion: () => App.rundfunkSetzen(!App.rundfunk) } : null,
+    App.istTelefon() && App.terminalTabs().length > 1 ? { text: App.rundfunk ? t('app.rundfunk.aus') : t('app.rundfunk.an'), icon: 'funk', aktion: () => App.rundfunkSetzen(!App.rundfunk) } : null,
     App.istTelefon() ? { text: t('app.menue.schriftGroesser'), icon: 'schrift', aktion: () => App.schriftSetzen(App.schriftGroesse() + 1) } : null,
     App.istTelefon() ? { text: t('app.menue.schriftKleiner'), icon: 'schrift', aktion: () => App.schriftSetzen(App.schriftGroesse() - 1) } : null,
     { text: t('app.menue.einstellungen'), icon: 'zahnrad', aktion: () => App.einstellungen() },
@@ -441,23 +444,40 @@ async function abmelden() {
 // ---------- Tabs ----------
 
 App.offeneTabs = () => App.tabs.filter((tt) => tt.zustand !== 'beendet' && tt.zustand !== 'fehler');
+// Offene Terminal-Tabs (ohne Bildschirme): «An alle senden», Befehle, Telefon-Tasten.
+App.terminalTabs = () => App.offeneTabs().filter((tt) => tt.art !== 'vnc');
 
-App.verbinden = function (host) {
-  const tt = new App.TerminalTab({ hostId: host.id, titel: host.name });
+// opt.art: 'terminal' (Vorgabe) oder 'vnc' (Bildschirm-Tab, js/vnc.js).
+App.verbinden = function (host, opt) {
+  const art = opt && opt.art === 'vnc' ? 'vnc' : 'terminal';
+  const tt = art === 'vnc' ? new App.VncTab({ hostId: host.id, titel: host.name }) : new App.TerminalTab({ hostId: host.id, titel: host.name });
   App.tabs.push(tt);
   App.terms.append(tt.element);
   App.aktivieren(tt);
 };
 
+// «Neu verbinden» nach Ende oder Fehler: Ein Bildschirm verbindet im selben Tab neu, ein Terminal
+// bekommt einen neuen Tab.
 App.neuVerbinden = function (tab) {
+  if (tab.art === 'vnc') { tab.verbinden(); return; }
   const host = App.daten.hosts.find((h) => h.id === tab.hostId);
   App.tabEntfernen(tab);
   if (host) App.verbinden(host);
 };
 
+// Tastatur an den Tab: Terminal (xterm) oder Bildschirm (noVNC).
+App.tabFokus = function (tab) {
+  if (!tab) return;
+  if (tab.art === 'vnc') tab.fokus(); else tab.term.focus();
+};
+
 App.aktivieren = function (tab) {
   App.aktiv = tab;
+  // Bildschirme erfahren vor dem Ausblenden davon (Fernaufloesung: sonst meldete noVNC die Groesse 0).
+  for (const tt of App.tabs) if (tt !== tab && tt.sichtbar) tt.sichtbar(false);
   for (const tt of App.tabs) tt.element.style.display = tt === tab ? '' : 'none';
+  if (tab && tab.sichtbar) tab.sichtbar(true);
+  document.documentElement.classList.toggle('vnc-vorn', !!(tab && tab.art === 'vnc')); // vnc.css: Mauszeiger von noVNC
   App.start.classList.toggle('versteckt', !!tab);
   if (!tab) startZeichnen();
   App.tabsZeichnen();
@@ -466,10 +486,11 @@ App.aktivieren = function (tab) {
     // Anmeldung) kann bei nahen Hosts schon vor Ablauf der 20 ms offen sein.
     setTimeout(() => {
       tab.anpassen(true);
-      if (!App.istTelefon() && App.aktiv === tab && !dialogStapel.length && !menue.offen && !(App.paletteObj && App.paletteObj.offen)) tab.term.focus();
+      if (!App.istTelefon() && App.aktiv === tab && !dialogStapel.length && !menue.offen && !(App.paletteObj && App.paletteObj.offen)) App.tabFokus(tab);
     }, 20);
   }
-  if (App.dateien) App.dateien.fuerTab(tab);
+  // Dateien gehoeren zu einer SSH-Sitzung: bei einem Bildschirm-Tab keine.
+  if (App.dateien) App.dateien.fuerTab(tab); // bei einem Bildschirm-Tab (VNC) zeigt sie einen Hinweis
   if (App.hilfe && tab) App.hilfe.zeile(tab.aktuelleZeile());
 };
 
@@ -483,7 +504,9 @@ App.tabEntfernen = function (tab) {
 };
 
 App.tabSchliessen = async function (tab) {
-  if (tab.zustand === 'bereit' || tab.zustand === 'getrennt' || tab.zustand === 'abgeloest') {
+  if (tab.art === 'vnc' && tab.zustand === 'bereit') {
+    if (!(await frage(t('vnc.tab.trennenFrage', { titel: tab.titel }), { ja: t('vnc.trennen'), gefahr: true }))) return;
+  } else if (tab.art !== 'vnc' && (tab.zustand === 'bereit' || tab.zustand === 'getrennt' || tab.zustand === 'abgeloest')) {
     const text = t(tab.zustand === 'abgeloest' ? 'app.tab.beendenFrageAnderes' : 'app.tab.beendenFrage', { titel: tab.titel });
     if (!(await frage(text, { ja: t('app.beenden'), gefahr: true }))) return;
   }
@@ -493,27 +516,43 @@ App.tabSchliessen = async function (tab) {
 
 function tabHost(tt) { return App.daten.hosts.find((x) => x.id === tt.hostId); }
 
+// Symbol eines Tabs: Geraetesymbol (Terminal) bzw. Bildschirm (VNC), mit Zustandspunkt.
+function tabSymbol(tt, groesse) {
+  if (tt.art !== 'vnc') return hostSymbol(tabHost(tt), groesse, tt.zustand);
+  const h = tabHost(tt);
+  return el('span', { class: 'hsym z-' + tt.zustand, style: h && h.farbe ? { color: h.farbe } : null },
+    icon('bildschirm', groesse), el('span', { class: 'hsym-punkt', 'aria-hidden': 'true' }));
+}
+
 App.tabsZeichnen = function () {
-  // Tastenleiste (Telefon) nur, wenn ein Terminal verbunden ist — auf der Startseite stoert sie.
+  // Tastenleiste (Telefon) nur, wenn ein Terminal verbunden ist — auf der Startseite und bei einem
+  // Bildschirm (eigene Leiste) stoert sie.
   const leiste = document.querySelector('.tasten');
-  if (leiste) leiste.classList.toggle('ohne-terminal', !(App.aktiv && App.aktiv.zustand === 'bereit'));
+  if (leiste) leiste.classList.toggle('ohne-terminal', !(App.aktiv && App.aktiv.art !== 'vnc' && App.aktiv.zustand === 'bereit'));
   if (!App.tabsLeiste) return;
   ersetzen(App.tabsLeiste,
     ...App.tabs.map((tt) => el('div', { class: 'tab' + (tt === App.aktiv ? ' aktiv' : ''), role: 'tab', 'aria-selected': tt === App.aktiv ? 'true' : 'false', title: tt.titel + ' — ' + App.zustandText(tt.zustand) },
       el('button', { class: 'tab-knopf', type: 'button', onclick: () => App.aktivieren(tt), onauxclick: (e) => { if (e.button === 1) App.tabSchliessen(tt); } },
-        hostSymbol(tabHost(tt), 16, tt.zustand), el('span', { class: 't' }, tt.titel)),
+        tabSymbol(tt, 16), el('span', { class: 't' }, tt.titel)),
       el('button', { class: 'zu', type: 'button', 'aria-label': t('app.tab.schliessen'), title: t('app.tab.schliessen'), onclick: () => App.tabSchliessen(tt) }, icon('x', 14)))),
     ikonKnopf('plus', t('app.kopf.neu'), () => App.palette(''), { class: 'ikon tab-neu' }));
   // Telefon: Titel des aktiven Tabs als Auswahl
   const tt = App.aktiv;
   ersetzen(App.tabWahl,
-    tt ? hostSymbol(tabHost(tt), 18, tt.zustand) : keywaySymbol(22),
+    tt ? tabSymbol(tt, 18) : keywaySymbol(22),
     el('span', { class: 't' }, tt ? tt.titel : MARKE),
     tt && tt.zustand !== 'bereit' ? el('span', { class: 'sr' }, App.zustandText(tt.zustand)) : null,
     App.tabs.length > 1 ? el('span', { class: 'chip' }, String(App.tabs.length)) : null,
     icon('pfeilRunter', 14));
   // Statusleiste (Desktop)
-  if (tt) {
+  if (tt && tt.art === 'vnc') {
+    const h = tabHost(tt);
+    ersetzen(App.statusleiste,
+      el('span', { class: 'zustand z-' + tt.zustand }, el('span', { class: 'hsym-punkt', 'aria-hidden': 'true' }), App.zustandText(tt.zustand)),
+      h ? el('span', { class: 'geraet' }, geraetIcon(h.geraet, 14), geraetName(h.geraet)) : null,
+      tt.statusTeile(h),
+      App.groesseAnzeige = el('span', null, tt.groesseText()));
+  } else if (tt) {
     const h = tabHost(tt);
     ersetzen(App.statusleiste,
       el('span', { class: 'zustand z-' + tt.zustand }, el('span', { class: 'hsym-punkt', 'aria-hidden': 'true' }), App.zustandText(tt.zustand)),
@@ -532,12 +571,14 @@ function tabMenue(anker) {
   if (!App.tabs.length) { App.palette(''); return; }
   menue(anker, [
     ...App.tabs.map((tt) => ({ text: el('span', { class: 'menue-text' }, el('span', null, tt.titel), tt.zustand !== 'bereit' ? el('small', null, App.zustandText(tt.zustand)) : null),
-      symbol: hostSymbol(tabHost(tt), 18, tt.zustand), aktiv: tt === App.aktiv, aktion: () => App.aktivieren(tt) })),
+      symbol: tabSymbol(tt, 18), aktiv: tt === App.aktiv, aktion: () => App.aktivieren(tt) })),
     { text: t('app.kopf.neu'), icon: 'plus', aktion: () => App.palette('') },
     App.aktiv ? { text: t('app.tab.diesenSchliessen'), icon: 'x', gefahr: true, aktion: () => App.tabSchliessen(App.aktiv) } : null,
   ]);
 }
 
+// Startseite: Hosts mit Bildschirm (VNC) als Karten mit Vorschaubild und zwei Knoepfen
+// (Terminal, Bildschirm), darunter die uebrigen Hosts.
 function startZeichnen() {
   const d = App.daten;
   const zuletzt = lokal('zuletzt', []);
@@ -545,13 +586,20 @@ function startZeichnen() {
     const ia = zuletzt.indexOf(a.id), ib = zuletzt.indexOf(b.id);
     return (ia < 0 ? 999 : ia) - (ib < 0 ? 999 : ib) || a.name.localeCompare(b.name, lokalCode());
   });
-  ersetzen(App.start, 
+  const bildschirme = sortiert.filter((h) => h.vnc);
+  const andere = sortiert.filter((h) => !h.vnc);
+  if (bildschirme.length && App.vncVorladen) App.vncVorladen();
+  const beide = bildschirme.length && andere.length;
+  ersetzen(App.start,
     el('h2', null, d.hosts.length ? t('app.start.verbinden') : t('app.start.willkommen')),
-    d.hosts.length ? el('div', { class: 'karten' }, sortiert.map((h) => el('button', { class: 'karte', type: 'button', title: geraetName(h.geraet), onclick: () => App.verbinden(h) },
+    beide ? el('div', { class: 'start-gruppe' }, t('vnc.start.bildschirme')) : null,
+    bildschirme.length ? el('div', { class: 'karten bild' }, bildschirme.map((h) => App.vncKarte(h))) : null,
+    beide ? el('div', { class: 'start-gruppe' }, t('vnc.start.weitere')) : null,
+    andere.length ? el('div', { class: 'karten' }, andere.map((h) => el('button', { class: 'karte', type: 'button', title: geraetName(h.geraet), onclick: () => App.verbinden(h) },
       hostSymbol(h, 20),
       el('span', { class: 'haupt' }, el('b', null, h.name), el('small', null, hostZeile(h))),
-      icon('weiter')))) :
-      el('p', { style: { margin: 0, color: 'var(--text2)', lineHeight: 1.6, maxWidth: '560px' } }, t('app.start.leer')),
+      icon('weiter')))) : null,
+    d.hosts.length ? null : el('p', { style: { margin: 0, color: 'var(--text2)', lineHeight: 1.6, maxWidth: '560px' } }, t('app.start.leer')),
     el('div', { class: 'reihe' },
       el('button', { class: 'btn primaer', type: 'button', onclick: () => App.hostBearbeiten({}) }, icon('plus'), t('app.start.hostAnlegen')),
       el('button', { class: 'btn', type: 'button', onclick: () => App.zugangBearbeiten({}) }, icon('schluessel'), t('app.start.zugangAnlegen')),
@@ -559,14 +607,16 @@ function startZeichnen() {
     el('p', { style: { marginTop: 'auto', fontSize: '13px', color: 'var(--leise)' } }, erstelltVon()));
 }
 
+App.startZeichnen = startZeichnen;
+
 // Merkt die zuletzt verbundenen Hosts (Startseite sortiert danach).
 const altVerbinden = App.verbinden;
-App.verbinden = function (host) {
+App.verbinden = function (host, opt) {
   const z = lokal('zuletzt', []).filter((x) => x !== host.id);
   z.unshift(host.id);
   lokalSetzen('zuletzt', z.slice(0, 30));
   App.seiteUmschalten('links', false, true);
-  altVerbinden(host);
+  altVerbinden(host, opt);
 };
 
 // ---------- Rueckfragen beim Verbinden ----------
@@ -640,8 +690,8 @@ function hostNamen(hosts) { return hosts.map((h) => h.name).join(', '); }
 App.befehlEinfuegen = async function (text, opt) {
   const o = opt || {};
   const tt = App.aktiv;
-  if (!tt || tt.zustand !== 'bereit') { toast(t('app.keineSitzungVerbunden'), 'fehler'); return; }
-  const kritisch = istGefaehrlich(text) ? kritischeHosts(App.rundfunk ? App.tabs.filter((x) => x.zustand === 'bereit') : [tt]) : [];
+  if (!tt || tt.art === 'vnc' || tt.zustand !== 'bereit') { toast(t('app.keineSitzungVerbunden'), 'fehler'); return; }
+  const kritisch = istGefaehrlich(text) ? kritischeHosts(App.rundfunk ? App.terminalTabs().filter((x) => x.zustand === 'bereit') : [tt]) : [];
   if (kritisch.length) {
     const text1 = kritisch.length === 1 ? t('app.gefahr.frage', { name: kritisch[0].name }) : t('app.gefahr.frageMehrere', { namen: hostNamen(kritisch) });
     if (!(await frage(text1, { titel: t('app.gefahr.titel'), ja: t('app.gefahr.trotzdem'), gefahr: true, befehl: text }))) return;
@@ -678,7 +728,7 @@ App.befehlVorbereiten = function (befehl, titel, opt) {
 // mitlaeuft («rm -rf » + «cd …»), und schickt Enter hinter der Klammer von Bracketed Paste.
 App.inTerminal = function (text, ausfuehren) {
   const tt = App.aktiv;
-  if (!tt || tt.zustand !== 'bereit') { toast(t('app.keineSitzungVerbunden'), 'fehler'); return; }
+  if (!tt || tt.art === 'vnc' || tt.zustand !== 'bereit') { toast(t('app.keineSitzungVerbunden'), 'fehler'); return; }
   App.seiteUmschalten('dateien', false, true);
   if (!ausfuehren) { tt.einfuegen(text, { nurHier: true }); return; }
   if (tt.term.buffer.active.type === 'alternate') { toast(t('app.vollbild'), 'fehler'); return; }
@@ -699,7 +749,7 @@ App.hilfeBeiEingabe = function (tab) {
 // ---------- An alle senden ----------
 
 App.rundfunkSetzen = function (an) {
-  const bereit = App.offeneTabs().filter((tt) => tt.zustand === 'bereit');
+  const bereit = App.terminalTabs().filter((tt) => tt.zustand === 'bereit');
   if (an && bereit.length < 2) { toast(t('app.rundfunk.zuWenig'), 'fehler'); return; }
   if (an !== App.rundfunk) App.rundfunkEingabe = { text: '', frei: false };
   App.rundfunk = an;
@@ -714,8 +764,8 @@ App.rundfunkSetzen = function (an) {
 // Band «Eingaben gehen an …»: nennt die Tabs, die gerade verbunden sind (nach jedem Zustandswechsel neu).
 // Bleibt hoechstens ein offener Tab uebrig, endet «An alle senden».
 function rundfunkBandZeichnen() {
-  if (App.offeneTabs().length < 2) { App.rundfunkSetzen(false); return; }
-  const bereit = App.offeneTabs().filter((tt) => tt.zustand === 'bereit');
+  if (App.terminalTabs().length < 2) { App.rundfunkSetzen(false); return; }
+  const bereit = App.terminalTabs().filter((tt) => tt.zustand === 'bereit');
   const namen = bereit.map((tt) => tt.titel).join(', ');
   ersetzen(App.rundfunkBand, icon('funk'),
     el('span', { style: { flex: 1, minWidth: 0 } }, bereit.length === 1 ? t('app.rundfunk.band1', { namen }) : t('app.rundfunk.band', { n: bereit.length, namen })),
@@ -734,7 +784,7 @@ function rundfunkBandZeichnen() {
 App.rundfunkSenden = function (von, d, bestaetigt) {
   const geklammert = d.startsWith('\x1b[200~') && d.endsWith('\x1b[201~');
   const teil = { d, roh: geklammert ? d.slice(6, -6) : d, geklammert };
-  const ziele = App.tabs.filter((tt) => tt !== von && tt.zustand === 'bereit');
+  const ziele = App.terminalTabs().filter((tt) => tt !== von && tt.zustand === 'bereit');
   const zeilen = eingabeNachfuehren(App.rundfunkEingabe, teil.roh, bestaetigt);
   if (zeilen.length && !App.rundfunkHalt) {
     // Nur Tabs an der Eingabezeile: In einem Vollbildprogramm (vi, top) fuehrt Enter keinen Befehl aus.
@@ -809,7 +859,7 @@ function rundfunkHalten(tabs, zeile) {
     });
 }
 App.anAlleSenden = async function (text) {
-  const ziele = App.tabs.filter((tt) => tt.zustand === 'bereit');
+  const ziele = App.terminalTabs().filter((tt) => tt.zustand === 'bereit');
   const kritisch = kritischeHosts(ziele);
   const gefahr = istGefaehrlich(text);
   let frageText = t('app.rundfunk.frage', { n: ziele.length, namen: ziele.map((tt) => tt.titel).join(', ') });
@@ -854,15 +904,16 @@ App.modSetzen = function (k, an) {
 };
 
 function telefonTasten() {
+  const term = () => (App.aktiv && App.aktiv.art !== 'vnc' ? App.aktiv : null); // Bildschirme haben eine eigene Leiste
   const pfeil = (normal, app) => () => {
-    const tt = App.aktiv; if (!tt) return;
+    const tt = term(); if (!tt) return;
     const seq = tt.term.modes && tt.term.modes.applicationCursorKeysMode ? app : normal;
     tt.tippen(seq);
   };
   const taste = (beschr, aktion, extra) => el('button', Object.assign({ type: 'button', 'aria-label': (extra && extra.label) || beschr,
     onpointerdown: (e) => e.preventDefault(), // Tastatur bleibt offen
     onclick: () => { aktion(); } }, extra && extra.attrs), extra && extra.icon ? icon(extra.icon, 18) : beschr);
-  const senden = (s) => () => App.aktiv && App.aktiv.tippen(s);
+  const senden = (s) => () => term() && term().tippen(s);
   return el('div', { class: 'tasten', role: 'toolbar', 'aria-label': t('app.tasten.name') },
     taste('Esc', senden('\x1b')),
     taste('Tab', senden('\t')),
@@ -883,11 +934,11 @@ function telefonTasten() {
     taste('^D', senden('\x04'), { label: t('app.tasten.strgD') }), taste('^Z', senden('\x1a'), { label: t('app.tasten.strgZ') }), taste('^R', senden('\x12'), { label: t('app.tasten.strgR') }),
     el('span', { class: 'trenn' }),
     taste('', async () => {
-      try { const text = await navigator.clipboard.readText(); App.aktiv && App.aktiv.einfuegen(text); }
+      try { const text = await navigator.clipboard.readText(); if (term()) term().einfuegen(text); }
       catch (e) { toast(t('app.tasten.einfuegenFehler'), 'fehler'); }
     }, { icon: 'einfuegen', label: t('app.tasten.einfuegen') }),
-    taste('', () => { const s = App.aktiv && App.aktiv.term.getSelection(); if (s) kopieren(s); else toast(t('app.tasten.erstMarkieren')); }, { icon: 'kopieren', label: t('app.tasten.kopieren') }),
-    taste('', () => App.aktiv && App.aktiv.term.focus(), { icon: 'tastatur', label: t('app.tasten.tastatur') }));
+    taste('', () => { const s = term() && term().term.getSelection(); if (s) kopieren(s); else toast(t('app.tasten.erstMarkieren')); }, { icon: 'kopieren', label: t('app.tasten.kopieren') }),
+    taste('', () => term() && term().term.focus(), { icon: 'tastatur', label: t('app.tasten.tastatur') }));
 }
 
 // ---------- globale Tasten und Lebenszeichen ----------
@@ -907,6 +958,7 @@ document.addEventListener('visibilitychange', () => {
   // Telefon aus dem Hintergrund: sofort neu verbinden statt auf den Zeitgeber zu warten, und
   // scheinbar offene Verbindungen pruefen (nach einem Netzwechsel oft halb offen).
   for (const tt of App.tabs) {
+    if (tt.art === 'vnc') continue; // ein Bildschirm verbindet nur auf Knopfdruck neu
     if (tt.zustand === 'getrennt') tt.sofortNeu();
     else if (tt.zustand === 'bereit') {
       if (!tt.ws || tt.ws.readyState > 1) { tt.verbindungZu(0); tt.sofortNeu(); } else tt.lebenszeichen(4000);

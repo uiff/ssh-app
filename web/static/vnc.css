@@ -1,0 +1,114 @@
+/* Bildschirm-Tab (VNC): Werkzeugleiste oben (Desktop) bzw. einklappbar unten (Telefon), Bildflaeche
+   mit noVNC, Vollbild, Vorschaubilder auf der Startseite. Farben ueber die Variablen aus app.css. */
+
+.vnc-wrap { position: absolute; inset: 0; display: flex; flex-direction: column; background: var(--term); container-type: inline-size; container-name: vnc; }
+.vnc-flaeche { flex: 1; position: relative; min-height: 0; overflow: hidden; background: var(--term) center / contain no-repeat; }
+.vnc-ziel { position: absolute; inset: 0; }
+/* Nach dem Trennen: das letzte Bild abgedunkelt, darueber die Zustandskarte */
+.vnc-flaeche.mit-bild::before { content: ''; position: absolute; inset: 0; background: rgba(11, 13, 16, .72); }
+.vnc-flaeche.mit-bild .vnc-ziel { display: none; }
+
+/* ---------- Desktop: schmale Leiste oben ---------- */
+.vnc-leiste { flex: none; display: flex; align-items: center; gap: 4px; height: 44px; padding: 0 8px; background: #12151B; box-shadow: inset 0 -1px 0 var(--linie); overflow-x: auto; scrollbar-width: none; }
+.vnc-leiste::-webkit-scrollbar { display: none; }
+.vnc-leiste .platz { flex: 1; min-width: 8px; }
+.vnc-k { position: relative; display: inline-flex; align-items: center; justify-content: center; gap: 7px; height: 34px; min-width: 34px; padding: 0 10px; border-radius: 7px; color: var(--text2); font-size: 13px; white-space: nowrap; flex: none; }
+.vnc-k:hover { background: var(--flaeche2); color: var(--text); }
+.vnc-k[aria-pressed=true] { background: var(--akzent-grund); color: var(--akzent-hell); }
+.vnc-k:disabled { opacity: .4; cursor: default; }
+.vnc-k:disabled:hover { background: none; color: var(--text2); }
+.vnc-k.text { border: 1px solid var(--linie); font-family: var(--mono); font-size: 12.5px; }
+.vnc-segment { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 9px; border: 1px solid var(--linie); flex: none; }
+.vnc-segment .vnc-k { height: 30px; }
+.vnc-trenn { width: 1px; height: 22px; background: var(--linie); margin: 0 4px; flex: none; }
+/* Touch (Tablet): Knoepfe mindestens 44 px */
+@media (pointer: coarse) { .vnc-leiste { height: 52px; } .vnc-k { height: 44px; min-width: 44px; } .vnc-segment .vnc-k { height: 44px; } }
+/* Neuer Text vom Geraet in der Zwischenablage */
+.vnc-punkt { position: absolute; top: 5px; right: 5px; width: 8px; height: 8px; border-radius: 50%; background: var(--akzent); box-shadow: 0 0 0 2px #12151B; }
+/* Weniger Breite (Seitenleisten offen): zuerst verlieren die nicht gewaehlten Ansichten ihren Text,
+   dann alle Knoepfe ausser gewaehlten (Ansicht, Nur ansehen); ganz schmal faellt Strg+Alt+Entf weg
+   (bleibt unter Sondertasten). Der Text steht immer noch als Tooltip und aria-label da. */
+@container vnc (max-width: 1320px) { .vnc-segment .vnc-k[aria-pressed=false] .l { display: none; } .vnc-segment .vnc-k[aria-pressed=false] { padding: 0 8px; } }
+@container vnc (max-width: 1080px) { .vnc-leiste .vnc-k:not(.text):not([aria-pressed=true]) .l { display: none; } .vnc-leiste .vnc-k:not(.text):not([aria-pressed=true]) { padding: 0 8px; } }
+@container vnc (max-width: 680px) { .vnc-leiste .vnc-k.text { display: none; } .vnc-leiste .vnc-k .l { display: none; } .vnc-leiste .vnc-k { padding: 0 8px; } }
+
+/* Nur ansehen: Mauszeiger zeigt, dass Klicks nichts tun */
+.vnc-wrap.nur-ansehen .vnc-ziel canvas { cursor: default !important; }
+
+/* ---------- Telefon: einklappbare Leiste unten ---------- */
+.vnc-unten, .vnc-griff { display: none; }
+.vnc-eingabe { position: absolute; left: 0; bottom: 0; width: 1px; height: 1px; padding: 0; border: 0; opacity: 0; resize: none; overflow: hidden; font-size: 16px; pointer-events: none; z-index: -1; }
+@media (max-width: 899px) {
+  .vnc-leiste { display: none; }
+  .vnc-unten { display: flex; flex: none; gap: 2px; padding: 4px 4px calc(4px + var(--unten)); background: var(--flaeche); border-top: 1px solid var(--linie); overflow-x: auto; scrollbar-width: none; touch-action: pan-x; }
+  .vnc-unten::-webkit-scrollbar { display: none; }
+  .vnc-t { position: relative; flex: 1 0 auto; min-width: 56px; min-height: 52px; padding: 4px 6px; border-radius: 8px; display: inline-flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; color: var(--text2); font-size: 11px; line-height: 1.15; white-space: nowrap; }
+  .vnc-t:active { background: var(--wahl); }
+  .vnc-t[aria-pressed=true] { background: var(--akzent-grund); color: var(--akzent-hell); }
+  .vnc-t:disabled { opacity: .4; }
+  .vnc-t .vnc-punkt { top: 6px; right: calc(50% - 16px); box-shadow: 0 0 0 2px var(--flaeche); }
+  .vnc-wrap.leiste-zu .vnc-unten { display: none; }
+  .vnc-wrap.leiste-zu .vnc-griff { display: inline-flex; }
+  .vnc-griff { position: absolute; right: calc(10px + env(safe-area-inset-right, 0px)); bottom: calc(10px + var(--unten)); z-index: 6; width: 44px; height: 44px; border-radius: 22px; align-items: center; justify-content: center; background: rgba(28, 33, 42, .88); border: 1px solid var(--linie2); color: var(--text); box-shadow: 0 6px 20px rgba(0,0,0,.45); }
+}
+
+/* Touch-Geraete: noVNC zeichnet den Mauszeiger des Geraets als eigene Leinwand direkt im body
+   (z-index 65535). Sie liegt nur ueber dem Bildschirm-Tab, nie ueber Dialogen, Menues, Blaettern,
+   der Palette oder anderen Tabs (app.js setzt «vnc-vorn», solange ein Bildschirm-Tab vorn ist). */
+body > canvas { z-index: 46 !important; }
+html:not(.vnc-vorn) body > canvas, body:has(.schleier:not(.versteckt)) > canvas, body:has(.palette) > canvas { visibility: hidden !important; }
+/* Mehrere Bildschirm-Tabs: Jeder hat seinen eigenen Zeiger im body; nur der des vorderen Tabs zeigt sich. */
+body > canvas.vnc-zeiger-aus { visibility: hidden !important; }
+
+/* ---------- Vollbild: der Tab liegt ueber Kopf, Tabs und Leisten ---------- */
+.vnc-wrap.vollfenster { position: fixed; inset: 0; z-index: 45; height: var(--app-hoehe, 100%); padding: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) 0 env(safe-area-inset-left, 0px); }
+.vnc-vollbild, .vnc-vollbild body { background: var(--term); }
+
+/* ---------- Dialoge ---------- */
+.vnc-form, .vnc-ablage, .vnc-tasten { display: flex; flex-direction: column; gap: 14px; }
+.vnc-leise { color: var(--leise); font-size: 13px; margin: 0; line-height: 1.5; }
+.vnc-ablage textarea { min-height: 96px; }
+.vnc-empfangen { display: flex; flex-direction: column; gap: 8px; }
+.vnc-empfangen-text { background: var(--term); color: var(--text); }
+.vnc-tasten-raster { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.vnc-tasten-raster.f { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+.vnc-tasten-raster .btn { padding: 0 8px; white-space: normal; text-align: center; line-height: 1.2; }
+.vnc-tasten-raster.f .btn { font-family: var(--mono); }
+@media (max-width: 899px) {
+  .vnc-tasten-raster { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .vnc-tasten-raster.f { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* Statusleiste: Weg (ueber SSH / direkt), Nur ansehen */
+.statusleiste .vnc-weg { display: inline-flex; align-items: center; gap: 6px; }
+.statusleiste .vnc-weg svg.ic { width: 13px; height: 13px; }
+.statusleiste .vnc-weg.warn { color: var(--warn); }
+
+/* ---------- Startseite: Karten mit Vorschaubild ---------- */
+.start-gruppe { display: flex; align-items: center; gap: 8px; color: var(--leise); font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; margin-bottom: -6px; }
+.karten.bild { grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); }
+.karte.vnc-karte { flex-direction: column; align-items: stretch; gap: 0; padding: 0; overflow: hidden; }
+/* overflow und absolute Vorschau: Ein hohes Bild (Telefon im Hochformat) sprengt das Seitenverhaeltnis nicht */
+.vnc-karte-bild { position: relative; display: block; width: 100%; aspect-ratio: 16 / 10; overflow: hidden; background: var(--term); border-bottom: 1px solid var(--linie); }
+.vnc-karte-bild .vnc-vorschau { position: absolute; inset: 0; }
+.vnc-karte-bild:focus-visible { outline-offset: -3px; }
+.vnc-vorschau { display: flex; width: 100%; height: 100%; align-items: center; justify-content: center; flex-direction: column; gap: 8px; color: var(--leise); overflow: hidden; }
+.vnc-vorschau img { width: 100%; height: 100%; object-fit: cover; object-position: top center; display: block; }
+.vnc-vorschau.leer small { font-size: 12px; font-family: var(--sans); }
+.vnc-karte-text { display: flex; align-items: center; gap: 10px; padding: 12px 14px 4px; min-width: 0; }
+.vnc-karte-text .haupt { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.vnc-karte-knoepfe { display: flex; gap: 8px; padding: 10px 14px 14px; }
+.vnc-karte-knoepfe .btn { flex: 1; padding: 0 10px; }
+/* Fuer Listen (Palette, Host-Liste): kleines Bild in der Zeile, grosses im Detail */
+.vnc-vorschau.mini { width: 64px; height: 40px; flex: none; border-radius: 5px; border: 1px solid var(--linie); background: var(--term); }
+.vnc-vorschau.mini small { display: none; }
+.vnc-vorschau.mini svg.ic { width: 18px !important; height: 18px !important; }
+.vnc-vorschau.gross { height: auto; aspect-ratio: 16 / 10; border-radius: 8px; border: 1px solid var(--linie); background: var(--term); }
+.vnc-vorschau.gross img { object-fit: contain; }
+@media (max-width: 899px) {
+  .karten.bild { grid-template-columns: minmax(0, 1fr); }
+  .vnc-karte-bild { aspect-ratio: 16 / 9; }
+  /* Ohne Vorschaubild genuegt am Telefon ein schmaler Streifen */
+  .vnc-karte-bild:has(.vnc-vorschau.leer) { aspect-ratio: auto; height: 88px; }
+  .vnc-vorschau.leer { flex-direction: row; }
+}

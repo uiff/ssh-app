@@ -121,6 +121,11 @@ type nachricht struct {
 	HostID      int64  `json:"hostId,omitempty"`
 	Wieder      *bool  `json:"wieder,omitempty"`      // bereit: an eine laufende Sitzung angehaengt
 	Gespeichert bool   `json:"gespeichert,omitempty"` // bereit: erfragte Zugangsdaten gespeichert
+	// VNC (vnc.go). Groesse und Name des Bildschirms stehen erst in ServerInit, das Keyway
+	// unveraendert durchreicht: der Viewer im Browser kennt sie, «bereit» nicht.
+	Fehler       string `json:"fehler,omitempty"`       // vnc-passwort: warum erneut gefragt wird
+	Weg          string `json:"weg,omitempty"`          // bereit: "ssh" | "direkt"
+	Durchreichen *bool  `json:"durchreichen,omitempty"` // bereit: der Viewer meldet sich selbst an
 }
 
 // Schliesscodes des Terminal-WebSockets: der Browser verbindet danach nicht von selbst neu.
@@ -226,21 +231,23 @@ func fehlerText(sprache string, err error) string {
 	return texte.Uebersetzen(sprache, err)
 }
 
-func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
+// wsAnnehmen nimmt einen WebSocket an (Anmeldung von angemeldet() geprueft, Origin wie
+// der Host oder SSHAPP_ORIGINS) und liest im Hintergrund: Text-Nachrichten nach v.ein,
+// Binaerframes nach v.bin. Endet das Lesen, wird v.ctx abgebrochen. ok=false: nichts zu tun.
+func (s *Server) wsAnnehmen(w http.ResponseWriter, r *http.Request, leseGrenze int64) (v *wsVerbindung, cancel context.CancelFunc, ok bool) {
 	tok, err := r.Cookie(cookieName) // von angemeldet() geprueft
 	if err != nil {
 		fehlerT(w, r, http.StatusUnauthorized, "server.anmelden")
-		return
+		return nil, nil, false
 	}
 	// Origin muss zum Host passen (oder zu SSHAPP_ORIGINS).
 	c, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: s.originMuster(r)})
 	if err != nil {
-		return
+		return nil, nil, false
 	}
-	c.SetReadLimit(1 << 20)
+	c.SetReadLimit(leseGrenze)
 	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-	v := &wsVerbindung{s: s, c: c, ctx: ctx, token: tok.Value, sprache: texte.AusAnfrage(r),
+	v = &wsVerbindung{s: s, c: c, ctx: ctx, token: tok.Value, sprache: texte.AusAnfrage(r),
 		ein: make(chan nachricht, 8), bin: make(chan []byte, 64)}
 	go func() {
 		defer cancel()
@@ -269,6 +276,17 @@ func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}()
+	return v, cancel, true
+}
+
+func (s *Server) ws(w http.ResponseWriter, r *http.Request) {
+	v, cancel, ok := s.wsAnnehmen(w, r, 1<<20)
+	if !ok {
+		return
+	}
+	defer cancel()
+	c, ctx := v.c, v.ctx
+	var err error
 
 	q := r.URL.Query()
 	var sitzung *term.Sitzung
@@ -390,9 +408,40 @@ func (s *Server) sitzungAufbauen(v *wsVerbindung, hostID int64, spalten, zeilen 
 	if err != nil {
 		return nil, false, texte.Neu("server.host.unbekannt")
 	}
-	ziel, err := s.zielFuer(h, nil)
+	sv, err := s.sshAufbauen(v, h)
 	if err != nil {
 		return nil, false, err
+	}
+	titel := h.Name
+	if titel == "" {
+		titel = h.Adresse
+	}
+	sitzung, err := s.tm.Starten(term.Start{HostID: h.ID, Titel: titel, Fingerprint: sv.fp, Client: sv.client, Schliessen: sv.schliessen,
+		Spalten: spalten, Zeilen: zeilen, PfadFolgen: h.PfadFolgen})
+	if err != nil {
+		return nil, sv.gespeichert, err
+	}
+	log.Printf("Sitzung %s: %s@%s", sitzung.ID()[:6], sv.ziel.Anmeldung.Benutzer, sv.ziel.HostPort())
+	return sitzung, sv.gespeichert, nil
+}
+
+// sshVerbindung ist eine SSH-Verbindung, die sshAufbauen fuer einen Browser aufgebaut hat.
+type sshVerbindung struct {
+	client      *ssh.Client
+	schliessen  func()
+	ziel        sshx.Ziel
+	fp          string // Fingerprint des Host-Schluessels
+	gespeichert bool   // erfragte Zugangsdaten wurden gespeichert
+}
+
+// sshAufbauen verbindet per SSH mit einem Host (Terminal und VNC-Tunnel). Fehlende
+// Angaben (Benutzer, Passwort) und neue oder geaenderte Host-Schluessel fragt es im
+// Browser nach; erfragte Zugangsdaten speichert es erst nach erfolgreicher Anmeldung
+// und nur, wenn der Browser «speichern» gewaehlt hat.
+func (s *Server) sshAufbauen(v *wsVerbindung, h store.Host) (sshVerbindung, error) {
+	ziel, err := s.zielFuer(h, nil)
+	if err != nil {
+		return sshVerbindung{}, err
 	}
 	// Fehlende Angaben im Browser erfragen (Benutzer und/oder Passwort).
 	var speichern, benutzerGefragt, passwortGefragt bool
@@ -401,10 +450,10 @@ func (s *Server) sitzungAufbauen(v *wsVerbindung, hostID int64, spalten, zeilen 
 		v.senden(nachricht{T: "anmeldung", Benutzer: ziel.Anmeldung.Benutzer, Ziel: h.Name})
 		n, err := v.warten("anmeldung", 5*time.Minute)
 		if err != nil {
-			return nil, false, err
+			return sshVerbindung{}, err
 		}
 		if n.Abbrechen {
-			return nil, false, texte.Neu("server.ws.anmeldung.abgebrochen")
+			return sshVerbindung{}, texte.Neu("server.ws.anmeldung.abgebrochen")
 		}
 		speichern = n.Speichern
 		if ziel.Anmeldung.Benutzer == "" {
@@ -417,7 +466,7 @@ func (s *Server) sitzungAufbauen(v *wsVerbindung, hostID int64, spalten, zeilen 
 			passwortGefragt = true
 		}
 		if ziel.Anmeldung.Benutzer == "" {
-			return nil, false, texte.Neu("server.ws.kein.benutzer")
+			return sshVerbindung{}, texte.Neu("server.ws.kein.benutzer")
 		}
 	}
 
@@ -459,24 +508,14 @@ func (s *Server) sitzungAufbauen(v *wsVerbindung, hostID int64, spalten, zeilen 
 	defer cancel()
 	client, schliessen, err := sshx.Verbinden(ctx, ziel, pruefer)
 	if err != nil {
-		return nil, false, err
+		return sshVerbindung{}, err
 	}
 	// Erst nach erfolgreicher Anmeldung speichern, was der Browser erfragt hat.
 	gespeichert := false
 	if speichern && (benutzerGefragt || passwortGefragt) {
 		gespeichert = s.zugangsdatenMerken(h, ziel.Anmeldung.Benutzer, gefragtesPasswort, passwortGefragt)
 	}
-	titel := h.Name
-	if titel == "" {
-		titel = h.Adresse
-	}
-	sitzung, err := s.tm.Starten(term.Start{HostID: h.ID, Titel: titel, Fingerprint: fp, Client: client, Schliessen: schliessen,
-		Spalten: spalten, Zeilen: zeilen, PfadFolgen: h.PfadFolgen})
-	if err != nil {
-		return nil, gespeichert, err
-	}
-	log.Printf("Sitzung %s: %s@%s", sitzung.ID()[:6], ziel.Anmeldung.Benutzer, ziel.HostPort())
-	return sitzung, gespeichert, nil
+	return sshVerbindung{client: client, schliessen: schliessen, ziel: ziel, fp: fp, gespeichert: gespeichert}, nil
 }
 
 // zugangsdatenMerken speichert beim Verbinden erfragte Angaben: mit Passwort im

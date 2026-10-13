@@ -67,6 +67,21 @@ const ICONS = {
   pipe: 'M2 9h13v6H2zM15 7h3v10h-3zM18 12h4',
   geraet: 'M7 7h10v10H7zM10 4v3M14 4v3M10 17v3M14 17v3M4 10h3M4 14h3M17 10h3M17 14h3',
   socket: 'M9 2v5M15 2v5M6 7h12v4a6 6 0 0 1-12 0zM12 17v5',
+  // Bildschirm-Tab (VNC): Bildschirm, Ansicht, Vollbild, Zwischenablage, Sondertasten, Trennen.
+  bildschirm: 'M3 4h18v12H3zM8 20h8M12 16v4',
+  anpassen: 'M3 5h18v14H3zM8 9H6v2M16 9h2v2M8 15H6v-2M16 15h2v-2',
+  original: 'M3 5h18v14H3zM8 9v6M16 9v6M12 10.5v.01M12 13.5v.01',
+  aufloesung: 'M3 4h18v12H3zM8 20h8M12 16v4M7 10h10M9 8l-2 2 2 2M15 8l2 2-2 2',
+  verschieben: 'M12 3v18M3 12h18M9 6l3-3 3 3M9 18l3 3 3-3M6 9l-3 3 3 3M18 9l3 3-3 3',
+  qualitaet: 'M4 7h9M17 7h3M4 17h3M11 17h9M15 5v4M9 15v4',
+  auge: 'M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z',
+  vollbild: 'M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5',
+  vollbildAus: 'M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5',
+  ablage: 'M9 3h6v3H9zM9 4.5H5V21h14V4.5h-4M9 11h6M9 15h4',
+  sondertaste: 'M9 6a3 3 0 1 0-3 3h12a3 3 0 1 0-3-3v12a3 3 0 1 0 3-3H6a3 3 0 1 0 3 3z',
+  trennen: 'M9 15l-2 2a3 3 0 0 1-4.2-4.2l2-2M15 9l2-2a3 3 0 0 1 4.2 4.2l-2 2M8 3v3M3 8h3M16 21v-3M21 16h-3',
+  chevronRunter: 'M6 9l6 6 6-6',
+  chevronHoch: 'M6 15l6-6 6 6',
 };
 function icon(name, groesse) {
   const ns = 'http://www.w3.org/2000/svg';
@@ -201,7 +216,7 @@ function dialog({ titel, inhalt, knoepfe, breit, beimSchliessen, schliessbar = t
     // Fokus zurueck (nur Desktop: auf dem Telefon wuerde das die Tastatur oeffnen).
     if (!App.istTelefon() && (!document.activeElement || document.activeElement === document.body)) {
       if (vorher && vorher.isConnected && vorher !== document.body) vorher.focus({ preventScroll: true });
-      else if (App.aktiv && !dialogStapel.length && !(App.paletteObj && App.paletteObj.offen)) App.aktiv.term.focus();
+      else if (App.aktiv && !dialogStapel.length && !(App.paletteObj && App.paletteObj.offen)) App.tabFokus(App.aktiv);
     }
     if (beimSchliessen) beimSchliessen(wert);
   }

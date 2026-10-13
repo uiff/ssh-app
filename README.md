@@ -11,7 +11,8 @@
 </p>
 
 <p align="center">
-  A self-hosted web SSH client: terminal, files, and command help in one browser tab, on the desktop and on your phone.
+  A self-hosted web SSH client: terminal, remote screen (VNC), files, and command help in one browser tab, on the desktop
+  and on your phone.
 </p>
 
 <p align="center">
@@ -44,6 +45,70 @@ no third-party account. The interface is available in English and German.
   with Send to all, the tab you type in runs the line as usual, a dangerous line waits for your confirmation on the
   other critical hosts, and the remaining tabs run it right away.
 
+### Remote screen (VNC)
+
+<p align="center">
+  <img src="docs/bilder/en/desktop-vnc.png" width="100%" alt="The screen of an HMI panel in a tab next to two terminals, above it the toolbar with view, quality, view only, clipboard, special keys, Ctrl+Alt+Del, full screen, and disconnect; on the left the host with the buttons Terminal and Screen">
+</p>
+
+Like RealVNC Viewer, but in a browser tab: see and control the desktop of a Raspberry Pi, an HMI panel, or a PC. Each
+screen opens as a tab next to your terminals, and you can have several open at once.
+
+- **Turn it on per host:** in the host dialog under **Advanced**, turn on **Screen (VNC)**, choose the connection, and
+  set the VNC port (usually 5900; display `:1` is 5901). The home page then shows these hosts first, as cards with a
+  preview and the buttons Terminal and Screen. In the host list they get the same two buttons. A click on the row
+  opens the terminal, or the screen for an HMI panel connected directly without SSH credentials.
+- **Tunneled over SSH (default, recommended):** Keyway logs in to the host by SSH, just like for a terminal (host key
+  check, username and password, saving the credentials), and from there connects to the VNC server on the host itself
+  (`127.0.0.1:<port>`). The screen travels inside the encrypted SSH connection, and no VNC port has to be open on the
+  network: the VNC server can listen on localhost only. The SSH server has to allow port forwarding
+  (`AllowTcpForwarding`, on by default in OpenSSH); otherwise the app says so.
+- **Direct:** for devices without SSH, such as many HMI panels. Keyway connects straight to `<address>:<port>`.
+  **This is unencrypted:** between Keyway and the device, the screen and everything you type cross the network in
+  plain text, and the password is protected only by VNC’s weak challenge (DES). Use direct only on a network you
+  trust. Between the browser and Keyway, HTTPS still applies.
+- **Only the saved target:** Keyway connects only to the address and port saved with the host. The browser can’t name
+  another target.
+- **The VNC password stays on the server:** you can enter it in the host dialog or when Keyway asks for it. It is
+  stored encrypted in the vault, and the host dialog can remove it again. Keyway logs in to the VNC server itself
+  (RFB 3.3, 3.7, and 3.8 with the security types None and VNC Authentication), so the password never reaches the
+  browser. If it is missing or wrong, Keyway asks for it, and saves it only after a successful login and only if you
+  tick “Save VNC password for this host”. VNC Authentication uses only the first 8 characters. After 5 wrong passwords
+  Keyway closes the connection.
+- **Other login methods are passed through:** if the VNC server offers neither None nor VNC Authentication (for example
+  RealVNC Server with its RSA-AES login, Apple Remote Desktop, UltraVNC with MS-Logon II, or VeNCrypt with username and
+  password), Keyway passes the connection through unchanged, and the login happens in the browser (noVNC). Keyway
+  doesn’t save a password typed there, and the login dialog says so. Methods that need TLS inside the VNC connection
+  (VeNCrypt with TLS or X.509) don’t work in the browser. For such devices, switch the VNC server to VNC password
+  authentication and let the SSH tunnel do the encryption.
+- **Toolbar:**
+  - **View:** Fit (the whole screen in the window), Actual size (1:1, with scrolling), or Remote resize (the device
+    changes its resolution to fit the window, if its VNC server supports that; otherwise the picture is fitted).
+  - **Quality:** Automatic, High, Medium, or Low. Lower quality needs less data on slow connections.
+  - **View only:** watch without sending mouse or keyboard input to the device.
+  - **Clipboard:** send text to the device’s clipboard, and see and copy the text last copied on the device.
+  - **Special keys:** <kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>Del</kbd>, Windows key, <kbd>Alt</kbd>+<kbd>Tab</kbd>, Esc,
+    Tab, Print Screen, and F1 to F12, which the browser or your own computer would otherwise catch.
+  - **Full screen** and **Disconnect.** A disconnected screen keeps its last picture, dimmed, and has a Reconnect
+    button, just like a terminal.
+
+  This browser remembers view, quality, and View only for each host.
+- **On your phone:** tap to click, long press to right-click, drag to drag with the mouse, two fingers to scroll.
+  Pinching sends <kbd>Ctrl</kbd> with the mouse wheel, which zooms in many programs on the device. In Actual size,
+  **Pan** lets you move the picture by dragging, while tapping still clicks. The Keyboard button brings up the
+  on-screen keyboard.
+- **Preview pictures:** a small picture of the screen, for the home page and the host list. It is stored only in this
+  browser, never on the server and not in the backup. It is updated every 30 seconds while connected, also in View
+  only, and when you disconnect. Because it can show confidential content, you can turn saving previews off in
+  Settings (on by default) and delete the stored ones.
+- **A screen lasts as long as its tab:** unlike terminal sessions, a VNC connection doesn’t keep running on the server.
+  It ends when you close its tab, reload the page, or sign out (also through the automatic lock). Then open the screen
+  again, or choose Reconnect in its tab.
+
+<p align="center">
+  <img src="docs/bilder/en/telefon-vnc.png" width="300" alt="The screen of an HMI panel on a phone, fitted to the width, with the gestures hint at the top and the toolbar with Keyboard, Keys, Clipboard, View, and More at the bottom">
+</p>
+
 ### Hosts with device types
 
 <p align="center">
@@ -55,8 +120,8 @@ no third-party account. The interface is available in English and German.
   printer. You can recognize your machines at a glance in the list.
 - **Simple host dialog:** you only see device type, name, address, username, password, and folder. The address field
   also takes `user@host:port`, `ssh://…`, `ssh -p 2222 user@host`, or `[fe80::1]:2222` and fills in username and port
-  for you. Port, key or vault credential, tags, color, note, and “Files panel follows the terminal” are under
-  **Advanced**.
+  for you. Port, key or vault credential, screen (VNC), tags, color, note, and “Files panel follows the terminal” are
+  under **Advanced**.
 - **Folders, tags, colors, and notes.** The filter above the list searches names, addresses, usernames, device types,
   and tags. If exactly one host matches, <kbd>Enter</kbd> connects.
 
@@ -123,6 +188,8 @@ no third-party account. The interface is available in English and German.
 - **Key bar** with Esc, Tab, Ctrl, Alt, arrows, Home/End, Page Up/Down, <kbd>Ctrl</kbd>+<kbd>C</kbd>/<kbd>D</kbd>/<kbd>Z</kbd>/<kbd>R</kbd>,
   common shell symbols, and paste and copy.
 - **Built for touch:** the menu, Files, and the command help open as sheets, and every touch target is at least 44 px.
+- **Remote screen by touch:** gestures for clicking, right-clicking, dragging, and scrolling, plus a button for the
+  on-screen keyboard (see [Remote screen (VNC)](#remote-screen-vnc)).
 - **Home screen:** add Keyway to your home screen and it runs like an app.
 
 ### Language and look
@@ -136,7 +203,8 @@ no third-party account. The interface is available in English and German.
 
 ### Backup
 
-- **One encrypted file** with all hosts, folders, credentials, snippets, and known host keys. You can restore it on this
+- **One encrypted file** with all hosts (including their VNC settings and saved VNC passwords), folders, credentials,
+  snippets, and known host keys. You can restore it on this
   system or on another one with the recovery key. Restoring also brings back the sign-in of the backed-up system (see
   [Backup and moving to a new system](#backup-and-moving-to-a-new-system)).
 
@@ -255,11 +323,11 @@ with `go run`, the program defaults apply (column “Without container”).
 | `SSHAPP_TLS_CERT` | – | – | With `SSHAPP_TLS=eigen`: path to the certificate (PEM, including intermediate certificates) |
 | `SSHAPP_TLS_KEY` | – | – | With `SSHAPP_TLS=eigen`: path to the private key (PEM). In the container it must be readable by user 65532 |
 | `SSHAPP_COOKIE_SECURE` | – | – | `1` = send the cookie over HTTPS only (set this with `SSHAPP_TLS=aus` behind an HTTPS proxy) |
-| `SSHAPP_PROXY` | – | – | Addresses or networks of trusted reverse proxies, comma-separated (e.g. `172.16.0.0/12` or `10.0.0.5, fd00::/8`). Only for requests from there does the app use `X-Forwarded-For` (sign-in lockout per browser instead of per proxy) and `X-Forwarded-Host` (terminal WebSocket) |
+| `SSHAPP_PROXY` | – | – | Addresses or networks of trusted reverse proxies, comma-separated (e.g. `172.16.0.0/12` or `10.0.0.5, fd00::/8`). Only for requests from there does the app use `X-Forwarded-For` (sign-in lockout per browser instead of per proxy) and `X-Forwarded-Host` (terminal and VNC WebSockets) |
 | `SSHAPP_HOSTS` | – | – | Additional host names for the app, comma-separated; `*.example.com` covers all subdomains (DNS rebinding protection, see below). When set, the app always checks the name, also over HTTPS |
-| `SSHAPP_ORIGINS` | – | – | Additional allowed origins (`Origin`) for the terminal WebSocket, comma-separated, patterns like `https://*.example.com`. Only needed if a proxy changes the Host header |
+| `SSHAPP_ORIGINS` | – | – | Additional allowed origins (`Origin`) for the terminal and VNC WebSockets, comma-separated, patterns like `https://*.example.com`. Only needed if a proxy changes the Host header |
 | `SSHAPP_HSTS` | – | – | `1` = send Strict-Transport-Security: browsers then use only HTTPS for this name for one year, on all ports. Only set it if everything under this name speaks HTTPS |
-| `SSHAPP_LEERLAUF_MIN` | `30` | `30` | Minutes without activity until the sign-in expires and the vault locks. Activity means typing in the terminal and actions in the app; background polling doesn’t count. Running sessions stay alive and can be reopened after signing in |
+| `SSHAPP_LEERLAUF_MIN` | `30` | `30` | Minutes without activity until the sign-in expires and the vault locks. Activity means typing in the terminal, input on a VNC screen, and actions in the app; background polling doesn’t count. Running terminal sessions stay alive and can be reopened after signing in; VNC screens are disconnected |
 
 **DNS rebinding protection:** a malicious website could point its own name at the app’s address. That is why the app
 checks the name it is called by in HTTP mode (`SSHAPP_TLS=aus`), and always as soon as `SSHAPP_HOSTS` is set. The only
@@ -291,11 +359,12 @@ network is in that range too, enter only the exact address.
 
 What the proxy has to do:
 
-- **Pass WebSockets through** (terminal at `/api/ws`). The browser sends a keepalive every 25 seconds, so the usual
-  60-second timeouts are enough.
+- **Pass WebSockets through** (terminal at `/api/ws`, VNC screen at `/api/vnc`). Terminal and screen send a keepalive
+  every 25 seconds, so the usual 60-second timeouts (nginx: `proxy_read_timeout`) are enough, even for a screen whose
+  picture doesn’t change.
 - **Pass the Host header through unchanged, including the port** (or set `X-Forwarded-Host`; that only counts if the
   proxy is listed in `SSHAPP_PROXY`). The app only accepts a WebSocket if `Origin` and `Host` match. Otherwise the page
-  opens, but no terminal does.
+  opens, but no terminal or screen does.
 - **Set `X-Forwarded-For`**, so the sign-in lockout hits the individual browser and not everyone.
 - **Allow large uploads.** The Files panel uploads files of any size, and a backup may be up to 64 MB.
 
@@ -367,6 +436,10 @@ at startup.
   typed or internal buffers) can’t be wiped reliably. Anyone who can read the process memory (root, core dump, swap) may
   find them. To connect, the server has to decrypt a secret briefly. End-to-end encryption all the way to the browser
   isn’t possible for an SSH gateway.
+- VNC: through SSH, the screen travels inside the encrypted SSH connection. With “direct”, the VNC connection between
+  Keyway and the device is unencrypted, so use it only on a network you trust. The VNC password stays on the server:
+  Keyway logs in to the VNC server itself, and the browser only gets the screen. Keyway connects only to the address and
+  port saved with the host.
 - The image contains no shell and runs as an unprivileged user (65532). The Compose file also sets a read-only file
   system and drops all Linux capabilities.
 - Setup is open until someone completes it. So set the app up right after starting it (see above).
@@ -406,6 +479,23 @@ node --experimental-websocket tools/klicktest.js https://localhost:8443 127.0.0.
 `DATEIEN_ORDNER=<dir>` also tests the Files panel. This only works with the test SSH server, because the folder is
 created on your machine.
 
+For the remote screen there is a **test VNC server** too. It listens only on your own machine (`127.0.0.1` or `::1`)
+and shows a test picture with a running clock. Clicks paint dots, and keys, the mouse wheel, and the clipboard show up
+in the picture.
+
+```bash
+go run ./tools/testvnc -addr 127.0.0.1:5999 -passwort secret
+```
+
+In Keyway, add a host with the address `127.0.0.1`, turn on VNC with port 5999, and choose Direct. To try the SSH
+tunnel, use the test SSH server as the host instead (connection Tunneled over SSH, VNC port 5999): its port forwarding
+reaches your machine. `-typ vencrypt` tests the pass-through (login in the browser), `-version 3.3` an old server, and
+`-bild <file.png>` shows a picture of your own. With the test VNC server running, `VNC_PORT=5999 VNC_PW=secret` also
+lets `tools/klicktest.js` check the screen tab (password prompt, clicks, toolbar, phone keyboard, preview).
+
+The screen viewer (noVNC) logs to the browser console only when asked to: set `localStorage` key
+`sshapp.vncProtokoll` to `"debug"`, `"info"`, `"warn"`, or `"error"` and reload the page.
+
 For the command help during development, put `tldr-pages.de.zip` and `tldr-pages.en.zip` from
 <https://github.com/tldr-pages/tldr/releases> into `./data/hilfe/` (or `<SSHAPP_DATA>/hilfe/`). The image packs these
 archives itself during the build, from a pinned commit of the tldr repository (`TLDR_COMMIT` in the Dockerfile).
@@ -430,5 +520,7 @@ Translations: each text exists in German and English.
 
 MIT, see [LICENSE](LICENSE). Third-party software and data: see [NOTICE](NOTICE). The license texts of all bundled and
 compiled-in libraries are embedded and can be viewed in the app under Settings › About › Licenses. The command help
-comes from [tldr-pages](https://github.com/tldr-pages/tldr) (CC BY 4.0). The names and logos “Keyway” and “IoTUeli” are
+comes from [tldr-pages](https://github.com/tldr-pages/tldr) (CC BY 4.0). The remote screen uses
+[noVNC](https://github.com/novnc/noVNC) (MPL-2.0), included unmodified in `web/static/vendor/novnc/`. The names and
+logos “Keyway” and “IoTUeli” are
 trademarks of IoTUeli and aren’t covered by the MIT License.

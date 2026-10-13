@@ -76,7 +76,10 @@ class Dateien {
 
   platzhalter() {
     const tab = this.tab;
-    const text = !tab ? t('dateien.platzhalter.keineSitzung')
+    // Ein Bildschirm-Tab (VNC) hat keine SSH-Sitzung: app.js gibt dann null weiter.
+    const bildschirm = !tab && App.aktiv && App.aktiv.art === 'vnc';
+    const text = bildschirm ? t('dateien.platzhalter.bildschirm')
+      : !tab ? t('dateien.platzhalter.keineSitzung')
       : (tab.zustand === 'verbinde' || tab.zustand === 'getrennt') ? t('dateien.platzhalter.wartet')
         : t('dateien.platzhalter.nichtVerbunden');
     this.listeAktuell = false;
@@ -85,6 +88,7 @@ class Dateien {
 
   // Aufruf bei Tab-Wechsel und beim Oeffnen der Leiste (auto: ohne Zutun des Benutzers).
   fuerTab(tab, auto) {
+    if (tab && tab.art === 'vnc') tab = null; // Bildschirm-Tab (VNC): keine SSH-Sitzung, keine Dateien
     if (this.tab !== tab) { this.tab = tab; this.pfad = ''; this.eintraege = []; this.listeAktuell = false; this.fehlPfad = null; this.pfadZeigen(''); }
     this.knoepfeSetzen();
     if (!this.sichtbar()) return;

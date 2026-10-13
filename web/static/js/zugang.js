@@ -186,6 +186,25 @@ App.einstellungen = function () {
     el('span', { class: 'farbpunkt', style: { background: a.farbe } }), a[I18N.sprache] || a.de)));
   };
   akzenteZeichnen();
+  // Vorschaubilder der Bildschirme (VNC): liegen nur in diesem Browser (App.vorschau, tresor.js).
+  const vsBestand = el('span', { class: 'vorschau-bestand', role: 'status' });
+  const vsSchalter = el('input', { type: 'checkbox', id: 'e-vorschau', class: 'schalter', role: 'switch', checked: App.vorschau.an(),
+    onchange: () => {
+      const n = App.vorschau.setzen(vsSchalter.checked);
+      if (n) toast(t(n === 1 ? 'hosts.einst.vorschauGeloescht1' : 'hosts.einst.vorschauGeloescht', { n }));
+      vsZeichnen();
+    } });
+  const vsLoeschen = el('button', { class: 'btn', type: 'button', onclick: () => {
+    const n = App.vorschau.alleLoeschen();
+    toast(t(n === 1 ? 'hosts.einst.vorschauGeloescht1' : 'hosts.einst.vorschauGeloescht', { n }));
+    vsZeichnen();
+  } }, icon('muell'), t('hosts.einst.vorschauLoeschen'));
+  const vsZeichnen = () => {
+    const b = App.vorschau.bestand();
+    vsBestand.textContent = b.n ? t(b.n === 1 ? 'hosts.einst.vorschauBestand1' : 'hosts.einst.vorschauBestand', { n: b.n, kb: Math.max(1, Math.round(b.bytes / 1024)) }) : t('hosts.einst.vorschauKeine');
+    vsLoeschen.disabled = !b.n;
+  };
+  vsZeichnen();
   const bekannt = el('div', { style: { display: 'flex', flexDirection: 'column' } });
   const bekanntZeichnen = () => ersetzen(bekannt, ...(App.daten.bekannt.length ? App.daten.bekannt.map((b) => el('div', { class: 'zeile-wrap', style: { borderBottom: '1px solid var(--linie)' } },
     el('div', { class: 'zeile', style: { cursor: 'default' } }, el('span', { class: 'haupt' }, el('b', { class: 'mono', style: { fontSize: '13px' } }, b.ziel), el('small', null, b.typ + ' · ' + b.fingerprint))),
@@ -204,6 +223,14 @@ App.einstellungen = function () {
           el('div', { class: 'hinweis' }, t('hosts.einst.spracheHinweis'))),
         el('div', { class: 'feld' }, el('span', { class: 'label', id: 'e-akzent-label' }, t('hosts.einst.akzent')), akzente),
         el('div', { class: 'schrift-feld' }, feldMit('e-schrift', t('hosts.einst.schrift'), schrift))),
+      el('div', { class: 'einstellungen-gruppe' },
+        el('h4', null, t('hosts.einst.vorschau')),
+        el('p', null, t('hosts.einst.vorschauText')),
+        el('label', { class: 'check vorschau-schalter', for: 'e-vorschau' },
+          el('span', { class: 'vorschau-schalter-text' }, el('b', null, t('hosts.einst.vorschauSpeichern')),
+            el('span', { class: 'check-hinweis' }, t('hosts.einst.vorschauHinweis'))),
+          vsSchalter),
+        el('div', { class: 'reihe einst-knoepfe vorschau-reihe' }, vsLoeschen, vsBestand)),
       el('div', { class: 'einstellungen-gruppe' },
         el('h4', null, t('hosts.einst.backup')),
         el('p', null, t('hosts.einst.backupText')),

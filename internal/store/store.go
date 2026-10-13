@@ -37,6 +37,35 @@ type Host struct {
 	PfadFolgen bool     `json:"pfadFolgen"`
 	Notiz      string   `json:"notiz"`
 	Geraet     string   `json:"geraet"` // Geraetetyp (ids aus web/static/js/geraete.js, '' = Allgemein)
+
+	// VNC-Viewer: Bildschirm des Hosts. Weg «ssh» tunnelt ueber die SSH-Verbindung zum
+	// Port auf dem Host selbst, «direkt» verbindet per TCP mit Adresse:VncPort.
+	VNC            bool   `json:"vnc"`
+	VncPort        int    `json:"vncPort"` // 0 = 5900
+	VncWeg         string `json:"vncWeg"`  // "ssh" | "direkt" ("" = ssh)
+	HatVncPasswort bool   `json:"hatVncPasswort"`
+	// VncPasswortEnc ist das verschluesselte VNC-Passwort, nie in JSON.
+	VncPasswortEnc []byte `json:"-"`
+	// VncPasswortSetzen: HostSpeichern ersetzt das gespeicherte VNC-Passwort durch
+	// VncPasswortEnc (nil entfernt es). Sonst bleibt es beim Aendern unberuehrt.
+	VncPasswortSetzen bool `json:"-"`
+}
+
+// VNC-Vorgaben.
+const (
+	VncPortVorgabe = 5900
+	VncWegSSH      = "ssh"
+	VncWegDirekt   = "direkt"
+)
+
+// vncVorgaben fuellt leere VNC-Felder (aeltere Daten, Backups).
+func (h *Host) vncVorgaben() {
+	if h.VncPort == 0 {
+		h.VncPort = VncPortVorgabe
+	}
+	if h.VncWeg == "" {
+		h.VncWeg = VncWegSSH
+	}
 }
 
 // Zugang = Benutzername plus Passwort und/oder privater Schluessel.
@@ -84,7 +113,8 @@ CREATE TABLE IF NOT EXISTS host (
   id INTEGER PRIMARY KEY, name TEXT NOT NULL, adresse TEXT NOT NULL, port INTEGER NOT NULL DEFAULT 22,
   benutzer TEXT NOT NULL DEFAULT '', ordner_id INTEGER NOT NULL DEFAULT 0, zugang_id INTEGER NOT NULL DEFAULT 0,
   farbe TEXT NOT NULL DEFAULT '', tags TEXT NOT NULL DEFAULT '',
-  pfad_folgen INTEGER NOT NULL DEFAULT 1, notiz TEXT NOT NULL DEFAULT '', geraet TEXT NOT NULL DEFAULT '');
+  pfad_folgen INTEGER NOT NULL DEFAULT 1, notiz TEXT NOT NULL DEFAULT '', geraet TEXT NOT NULL DEFAULT '',
+  vnc INTEGER NOT NULL DEFAULT 0, vnc_port INTEGER NOT NULL DEFAULT 5900, vnc_weg TEXT NOT NULL DEFAULT 'ssh', vnc_passwort_enc BLOB);
 CREATE TABLE IF NOT EXISTS bekannt (ziel TEXT PRIMARY KEY, typ TEXT NOT NULL, schluessel TEXT NOT NULL, fingerprint TEXT NOT NULL, seit INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS snippet (id INTEGER PRIMARY KEY, name TEXT NOT NULL, befehl TEXT NOT NULL, beschreibung TEXT NOT NULL DEFAULT '');
 `
@@ -93,6 +123,10 @@ CREATE TABLE IF NOT EXISTS snippet (id INTEGER PRIMARY KEY, name TEXT NOT NULL, 
 // Datenbanken haben in host noch die Spalte jump_id; sie bleibt unbenutzt stehen.
 var nachruesten = []struct{ tabelle, spalte, def string }{
 	{"host", "geraet", `TEXT NOT NULL DEFAULT ''`},
+	{"host", "vnc", `INTEGER NOT NULL DEFAULT 0`},
+	{"host", "vnc_port", `INTEGER NOT NULL DEFAULT 5900`},
+	{"host", "vnc_weg", `TEXT NOT NULL DEFAULT 'ssh'`},
+	{"host", "vnc_passwort_enc", `BLOB`},
 }
 
 func Oeffnen(pfad string) (*Store, error) {
@@ -226,15 +260,19 @@ func (s *Store) OrdnerLoeschen(id int64) error {
 
 // --- Hosts ---
 
-const hostSpalten = `id,name,adresse,port,benutzer,ordner_id,zugang_id,farbe,tags,pfad_folgen,notiz,geraet`
+const hostSpalten = `id,name,adresse,port,benutzer,ordner_id,zugang_id,farbe,tags,pfad_folgen,notiz,geraet,vnc,vnc_port,vnc_weg,vnc_passwort_enc`
 
 func scanHost(sc interface{ Scan(...any) error }) (Host, error) {
 	var h Host
 	var tags string
-	var folgen int
-	err := sc.Scan(&h.ID, &h.Name, &h.Adresse, &h.Port, &h.Benutzer, &h.OrdnerID, &h.ZugangID, &h.Farbe, &tags, &folgen, &h.Notiz, &h.Geraet)
+	var folgen, vnc int
+	err := sc.Scan(&h.ID, &h.Name, &h.Adresse, &h.Port, &h.Benutzer, &h.OrdnerID, &h.ZugangID, &h.Farbe, &tags, &folgen, &h.Notiz, &h.Geraet,
+		&vnc, &h.VncPort, &h.VncWeg, &h.VncPasswortEnc)
 	h.Tags = splitTags(tags)
 	h.PfadFolgen = folgen != 0
+	h.VNC = vnc != 0
+	h.HatVncPasswort = len(h.VncPasswortEnc) > 0
+	h.vncVorgaben()
 	return h, err
 }
 
@@ -263,20 +301,39 @@ func (s *Store) Host(id int64) (Host, error) {
 	return h, err
 }
 
+// HostSpeichern legt einen Host an (ID 0) oder aendert ihn. Das VNC-Passwort schreibt es
+// beim Anlegen immer, beim Aendern nur mit VncPasswortSetzen.
 func (s *Store) HostSpeichern(h *Host) error {
 	if h.Port == 0 {
 		h.Port = 22
 	}
-	args := []any{h.Name, h.Adresse, h.Port, h.Benutzer, h.OrdnerID, h.ZugangID, h.Farbe, joinTags(h.Tags), b2i(h.PfadFolgen), h.Notiz, h.Geraet}
+	h.vncVorgaben()
+	args := []any{h.Name, h.Adresse, h.Port, h.Benutzer, h.OrdnerID, h.ZugangID, h.Farbe, joinTags(h.Tags), b2i(h.PfadFolgen), h.Notiz, h.Geraet,
+		b2i(h.VNC), h.VncPort, h.VncWeg}
 	if h.ID == 0 {
-		r, err := s.db.Exec(`INSERT INTO host(name,adresse,port,benutzer,ordner_id,zugang_id,farbe,tags,pfad_folgen,notiz,geraet) VALUES(?,?,?,?,?,?,?,?,?,?,?)`, args...)
+		r, err := s.db.Exec(`INSERT INTO host(name,adresse,port,benutzer,ordner_id,zugang_id,farbe,tags,pfad_folgen,notiz,geraet,vnc,vnc_port,vnc_weg,vnc_passwort_enc) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+			append(args, h.VncPasswortEnc)...)
 		if err != nil {
 			return err
 		}
 		h.ID, _ = r.LastInsertId()
+		h.HatVncPasswort = len(h.VncPasswortEnc) > 0
 		return nil
 	}
-	return mussTreffen(s.db.Exec(`UPDATE host SET name=?,adresse=?,port=?,benutzer=?,ordner_id=?,zugang_id=?,farbe=?,tags=?,pfad_folgen=?,notiz=?,geraet=? WHERE id=?`, append(args, h.ID)...))
+	if h.VncPasswortSetzen {
+		if err := mussTreffen(s.db.Exec(`UPDATE host SET name=?,adresse=?,port=?,benutzer=?,ordner_id=?,zugang_id=?,farbe=?,tags=?,pfad_folgen=?,notiz=?,geraet=?,vnc=?,vnc_port=?,vnc_weg=?,vnc_passwort_enc=? WHERE id=?`,
+			append(args, h.VncPasswortEnc, h.ID)...)); err != nil {
+			return err
+		}
+		h.HatVncPasswort = len(h.VncPasswortEnc) > 0
+		return nil
+	}
+	return mussTreffen(s.db.Exec(`UPDATE host SET name=?,adresse=?,port=?,benutzer=?,ordner_id=?,zugang_id=?,farbe=?,tags=?,pfad_folgen=?,notiz=?,geraet=?,vnc=?,vnc_port=?,vnc_weg=? WHERE id=?`, append(args, h.ID)...))
+}
+
+// HostVncPasswortSetzen ersetzt das verschluesselte VNC-Passwort eines Hosts (nil entfernt es).
+func (s *Store) HostVncPasswortSetzen(hostID int64, enc []byte) error {
+	return mussTreffen(s.db.Exec(`UPDATE host SET vnc_passwort_enc=? WHERE id=?`, enc, hostID))
 }
 
 // HostZugangSetzen speichert beim Verbinden erfragte Zugangsdaten am Host (eine

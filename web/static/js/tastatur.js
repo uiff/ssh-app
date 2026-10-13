@@ -10,8 +10,10 @@
   const wurzel = document.documentElement;
   let letzte = -1;
 
+  // Nicht: das Eingabefeld von xterm und das unsichtbare Feld des Bildschirm-Tabs (vnc.js) — beide
+  // sind keine Formularfelder, die man sehen muss.
   function istEingabe(e) {
-    return e && /^(INPUT|TEXTAREA|SELECT)$/.test(e.tagName) && !e.closest('.xterm');
+    return e && /^(INPUT|TEXTAREA|SELECT)$/.test(e.tagName) && !e.closest('.xterm, .vnc-eingabe');
   }
 
   // Haelt das fokussierte Feld sichtbar (nicht unter der Tastatur, nicht unter dem oberen Rand).

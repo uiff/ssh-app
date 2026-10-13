@@ -14,6 +14,11 @@
 // SPRACHE=de|en: Sprache der Oberflaeche (gemerkt wie nach der Sprachwahl), sonst die des Browsers;
 // LANG_CHROME=en-US o.ae. setzt die Browsersprache (Chrome-Schalter --lang).
 // Chrome: CHROME=/pfad, sonst Puppeteer-Cache (~/.cache/puppeteer/chrome-headless-shell).
+// VNC_PORT=<port>: zusaetzlich den Bildschirm-Tab (VNC) pruefen, gegen einen Test-VNC-Server auf
+// 127.0.0.1:<port> mit Weg «direkt» (go run ./tools/testvnc -addr 127.0.0.1:<port> [-passwort x];
+// VNC_PW=x, falls er ein Passwort verlangt): Bild, Klick (das Bild aendert sich), Ansichten,
+// Fernaufloesung, Nur ansehen, Vollbild, Zwischenablage, Sondertasten, Telefon-Leiste und Tastatur,
+// Trennen mit Vorschaubild auf der Startseite.
 // DATEIEN_ORDNER=/pfad: zusaetzlich die Dateileiste pruefen (Arten, Menue ohne Download bei Pipe/Geraet,
 // Download-Fehler, Hochladen mit Konflikt-Rueckfrage, «folgt» ohne Dauerabfrage, erfolgreicher Download).
 // Der Ordner wird neu angelegt und muss auf dem Rechner des SSH-Ziels liegen — also nur mit dem
@@ -32,6 +37,7 @@ const W = +wStr || 1440, H = +hStr || 900, MOBIL = W < 900, OHNE_SSH = sshHost =
 const BENUTZER = process.env.SSHAPP_USER || 'admin', PASSWORT = process.env.SSHAPP_PW || 'klicktest-passwort';
 const SPRACHE = process.env.SPRACHE || '', LANG = process.env.LANG_CHROME || (SPRACHE === 'en' ? 'en-US' : SPRACHE === 'de' ? 'de-CH' : '');
 const DATEIEN_ORDNER = process.env.DATEIEN_ORDNER || '';
+const VNC_PORT = +process.env.VNC_PORT || 0, VNC_PW = process.env.VNC_PW || '';
 const warte = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function chromePfad() {
@@ -117,7 +123,7 @@ function chromePfad() {
     if ((await ev('I18N.sprache')) !== 'en') return;
     const funde = await ev(`(() => {
       const re = /[äöüÄÖÜ]|\\b(und|oder|nicht|mit|für|bei|der|die|das|den|dem|eine?|ist|wird|Sitzungs?|Sitzungen|Verbind\\w*|Schliessen|Abbrechen|Einstellungen|Zugangs?|Tresor|Ordner|Dateien|Befehl\\w*|Suchen|Neue[rns]?|Anmeld\\w*|Abmelden|Speichern|Hinzu\\w*|anlegen|Passwort|Benutzer\\w*|Schlüssel|Fehler|Zurück|Weiter|Hilfe|Gerät\\w*|Erweitert|Sprache)\\b/;
-      const weg = (e) => !e || e.closest('.xterm, code, kbd, .fp, .schluessel-box, .befehl-gross, .term-deko, [lang=de], .karte small, .zeile small, .datei .n, .ph');
+      const weg = (e) => !e || e.closest('.xterm, code, kbd, .fp, .schluessel-box, .befehl-gross, .term-deko, [lang=de], .karte small, .zeile small, .datei .n, .ph, .vnc-fern-name');
       const aus = new Set();
       const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
       for (let n = w.nextNode(); n; n = w.nextNode()) {
@@ -178,6 +184,7 @@ function chromePfad() {
       for (const e of document.querySelectorAll('button, a, input:not([type=checkbox]):not([type=hidden]), select, textarea, label.check')) {
         if (e.closest('.versteckt') || e.classList.contains('versteckt')) continue;
         if (e.classList.contains('xterm-helper-textarea')) continue; // unsichtbares Eingabefeld von xterm, Trefferflaeche ist das Terminal
+        if (e.classList.contains('vnc-eingabe')) continue; // ebenso beim Bildschirm-Tab (Tastatur-Knopf)
         const r = e.getBoundingClientRect(); if (!r.width || !r.height || r.bottom < 0 || r.top > innerHeight || r.right < 0 || r.left > innerWidth) continue;
         let h = r.height, w = r.width; const n = getComputedStyle(e, '::after');
         if (n.content && n.content !== 'none' && n.position === 'absolute') { h -= (parseFloat(n.top) || 0) + (parseFloat(n.bottom) || 0); w -= (parseFloat(n.left) || 0) + (parseFloat(n.right) || 0); }
@@ -283,6 +290,114 @@ function chromePfad() {
     await ev('App.seiteUmschalten("dateien", false)');
   };
 
+  // Bildschirm-Tab (VNC_PORT): Test-VNC-Server auf 127.0.0.1, Weg «direkt».
+  const bildschirm = async (danach) => {
+    const pw = VNC_PW ? ', vncPasswort: ' + JSON.stringify(VNC_PW) : '';
+    const hostId = await ev(`(async () => { const h = await api('POST', '/api/hosts', { name: 'bildschirm', adresse: '127.0.0.1', port: 22, geraet: 'hmi', vnc: true, vncPort: ${VNC_PORT}, vncWeg: 'direkt'${pw} });
+      await App.datenLaden(); return h.id; })()`);
+    const host = await ev(`App.daten.hosts.find((h) => h.id === ${hostId})`);
+    if (!host || !host.vnc || host.vncPort !== VNC_PORT || host.vncWeg !== 'direkt') probleme.push('Bildschirm: Host-Felder nicht gespeichert: ' + JSON.stringify(host));
+    if (VNC_PW && !(host && host.hatVncPasswort)) probleme.push('Bildschirm: VNC-Passwort nicht gespeichert (hatVncPasswort)');
+    await ev('App.aktivieren(null)'); await warte(400);
+    await foto('bildschirm-start'); await flaechen('Startseite mit Bildschirm'); await deutsch('Startseite mit Bildschirm');
+    if (!(await ev('!!document.querySelector(".vnc-karte")'))) probleme.push('Bildschirm: Startseite ohne Karte mit Vorschau');
+    await ev(`App.verbinden(App.daten.hosts.find((h) => h.id === ${hostId}), { art: 'vnc' })`);
+    await bis('App.aktiv && App.aktiv.art === "vnc" && (App.aktiv.zustand !== "verbinde" || !!document.querySelector(".dialog #vnc-pw"))', 15000, 'Bildschirm verbunden');
+    if (await ev('!!document.querySelector(".dialog #vnc-pw")')) {
+      await foto('bildschirm-passwort'); await deutsch('VNC-Passwort'); await flaechen('VNC-Passwort');
+      await setze('#vnc-pw', VNC_PW || 'klicktest');
+      await klickT('vnc.pw.verbinden', 'document.querySelector(".dialog")');
+    }
+    await bis('App.aktiv.zustand === "bereit"', 15000, 'Bildschirm bereit (' + (await ev('App.aktiv.grund')) + ')');
+    await warte(1500);
+    await foto('bildschirm'); await flaechen('Bildschirm'); await deutsch('Bildschirm');
+    // Bild da und nicht einfarbig
+    const bild = await ev(`(() => { const d = App.aktiv.rfb.getImageData(); const s = new Set(); for (let i = 0; i < d.data.length; i += 4 * 997) s.add(d.data[i] + ',' + d.data[i + 1] + ',' + d.data[i + 2]); return { b: d.width, h: d.height, farben: s.size }; })()`);
+    console.log('Bildschirm:', JSON.stringify(bild));
+    if (!(bild.b > 50 && bild.h > 50 && bild.farben > 2)) probleme.push('Bildschirm: kein Bild ' + JSON.stringify(bild));
+    // Klick: das Testbild malt an der Stelle — der Ausschnitt um den Punkt aendert sich
+    const leinwand = () => ev(`(() => { const c = App.aktiv.ziel.querySelector('canvas'); const r = c.getBoundingClientRect(); return { x: r.left, y: r.top, w: r.width, h: r.height, cw: c.width, ch: c.height }; })()`);
+    const ausschnitt = (fx, fy) => ev(`(() => { const d = App.aktiv.rfb.getImageData(); let s = 0; for (let y = ${fy} - 14; y <= ${fy} + 14; y++) for (let x = ${fx} - 14; x <= ${fx} + 14; x++) { const i = 4 * (y * d.width + x); s = (s * 31 + d.data[i] * 7 + d.data[i + 1] * 3 + d.data[i + 2]) % 1000000007; } return s; })()`);
+    const klickAuf = async (fx, fy) => {
+      const c = await leinwand();
+      const x = c.x + (fx + 0.5) * c.w / c.cw, y = c.y + (fy + 0.5) * c.h / c.ch;
+      if (MOBIL) {
+        await cdp('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] }); await warte(60);
+        await cdp('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+      } else {
+        await cdp('Input.dispatchMouseEvent', { type: 'mouseMoved', x, y });
+        await cdp('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', buttons: 1, clickCount: 1 }); await warte(40);
+        await cdp('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', buttons: 0, clickCount: 1 });
+      }
+      await warte(700);
+    };
+    // Zufaellige Stelle: Das Testbild behaelt die Punkte frueherer Laeufe (gleiche Stelle = keine Aenderung).
+    const zufall = Math.random();
+    const punkt = async (n) => { const c = await leinwand(); return [Math.round(c.cw * (0.22 + 0.12 * n + 0.08 * zufall)), Math.round(c.ch * (0.6 + 0.25 * zufall))]; };
+    let [fx, fy] = await punkt(0);
+    let vorher = await ausschnitt(fx, fy);
+    await klickAuf(fx, fy);
+    if ((await ausschnitt(fx, fy)) === vorher) probleme.push('Bildschirm: Klick zeigt keine Wirkung');
+    await foto('bildschirm-klick');
+    // Nur ansehen: derselbe Klick bewirkt nichts
+    await ev('App.aktiv.nurAnsehenSetzen(true)'); await warte(200);
+    [fx, fy] = await punkt(2);
+    vorher = await ausschnitt(fx, fy);
+    await klickAuf(fx, fy);
+    if ((await ausschnitt(fx, fy)) !== vorher) probleme.push('Bildschirm: «Nur ansehen» laesst Klicks durch');
+    await foto('bildschirm-nur-ansehen'); await deutsch('Nur ansehen');
+    await ev('App.aktiv.nurAnsehenSetzen(false)');
+    // Ansichten: Originalgroesse (Desktop 1:1), Fernaufloesung (Geraet nimmt die Groesse der Flaeche an), Anpassen
+    await ev('App.aktiv.ansichtSetzen("original")'); await warte(900);
+    let c = await leinwand();
+    if (!MOBIL && Math.abs(c.w - c.cw) > 1) probleme.push('Bildschirm: Originalgroesse nicht 1:1 ' + JSON.stringify(c));
+    await foto('bildschirm-original'); await flaechen('Originalgroesse');
+    await ev('App.aktiv.ansichtSetzen("fern")'); await warte(2500);
+    c = await leinwand();
+    const f = await ev('(() => { const r = App.aktiv.flaeche.getBoundingClientRect(); return [Math.floor(r.width), Math.floor(r.height)]; })()');
+    console.log('Fernaufloesung:', JSON.stringify(c), 'Flaeche', JSON.stringify(f));
+    if (Math.abs(c.cw - f[0]) > 2 || Math.abs(c.ch - f[1]) > 2) probleme.push('Bildschirm: Fernaufloesung nicht angepasst ' + JSON.stringify(c) + ' / ' + f);
+    await foto('bildschirm-fern');
+    await ev('App.aktiv.ansichtSetzen("anpassen")'); await warte(900);
+    // Vollbild an und aus
+    await ev('App.aktiv.vollbildUmschalten()'); await warte(700);
+    if (!(await ev('App.aktiv.element.classList.contains("vollfenster")'))) probleme.push('Bildschirm: Vollbild geht nicht an');
+    await foto('bildschirm-vollbild'); await flaechen('Vollbild');
+    await ev('App.aktiv.vollbildUmschalten()'); await warte(500);
+    if (await ev('App.aktiv.element.classList.contains("vollfenster")')) probleme.push('Bildschirm: Vollbild geht nicht aus');
+    // Zwischenablage und Sondertasten
+    await ev('App.aktiv.ablageDialog()'); await warte(400);
+    await foto('bildschirm-ablage'); await flaechen('Zwischenablage'); await deutsch('Zwischenablage');
+    await setze('#vnc-ablage-text', 'klicktest');
+    await klickT('vnc.ablage.senden', 'document.querySelector(".dialog")'); await warte(300);
+    if (await ev('!!document.querySelector(".dialog")')) probleme.push('Bildschirm: Zwischenablage-Dialog bleibt offen');
+    await ev('App.aktiv.tastenDialog()'); await warte(400);
+    await foto('bildschirm-sondertasten'); await flaechen('Sondertasten'); await deutsch('Sondertasten');
+    await klickT('vnc.tasten.cad', 'document.querySelector(".dialog")'); await warte(300);
+    // Telefon: Leiste unten, Tastatur-Knopf fokussiert das Eingabefeld, Mehr-Menue
+    if (MOBIL) {
+      await klickT('vnc.tastatur', 'App.aktiv.unten'); await warte(300);
+      if (!(await ev('document.activeElement === App.aktiv.eingabe'))) probleme.push('Bildschirm: Tastatur-Knopf oeffnet keine Eingabe');
+      await ev('App.aktiv.eingabe.blur()');
+      await klickT('vnc.mehr', 'App.aktiv.unten'); await warte(300);
+      await foto('bildschirm-mehr'); await flaechen('Mehr-Menue (Bildschirm)'); await deutsch('Mehr-Menue (Bildschirm)');
+      await ev('menue.offen && menue.offen()');
+    }
+    if (!MOBIL) console.log('Statusleiste (Bildschirm):', await ev('document.querySelector(".statusleiste").innerText.replace(/\\n/g, " | ")'));
+    // Trennen: Zustandskarte mit «Neu verbinden», Vorschaubild gespeichert und auf der Startseite
+    await ev('App.aktiv.trennen()');
+    await bis('App.aktiv.zustand === "beendet"', 8000, 'Bildschirm getrennt');
+    await warte(300);
+    await foto('bildschirm-getrennt'); await flaechen('Bildschirm getrennt'); await deutsch('Bildschirm getrennt');
+    const vorschau = await ev(`App.vorschau.lesen(${hostId})`);
+    if (!vorschau) probleme.push('Bildschirm: kein Vorschaubild nach dem Trennen');
+    await ev('App.tabSchliessen(App.aktiv)'); await warte(400);
+    await ev('App.aktivieren(null)'); await warte(300);
+    if (!(await ev('!!document.querySelector(".vnc-karte img")'))) probleme.push('Bildschirm: Startseite zeigt das Vorschaubild nicht');
+    await foto('bildschirm-start-vorschau');
+    if (danach) await ev(danach);
+  };
+
   // Dialoge fotografieren, Zugang und Host per API anlegen (unabhaengig vom Aufbau der Dialoge)
   await ev('App.zugangBearbeiten({})');
   await warte(300);
@@ -330,6 +445,7 @@ function chromePfad() {
     await ev('App.paletteObj.schliessen()');
     await ev('App.einstellungen()'); await warte(500); await foto('einstellungen'); await flaechen('Einstellungen'); await deutsch('Einstellungen');
     await ev('dialogStapel.slice().forEach((d) => d.zu())');
+    if (VNC_PORT) await bildschirm();
     await abschluss();
   }
   const zugang = await ev(`api('POST', '/api/zugaenge', { name: 'testziel', benutzer: ${JSON.stringify(sshUser)}, passwort: ${JSON.stringify(sshPw)} })`);
@@ -422,6 +538,11 @@ function chromePfad() {
   await foto('einstellungen');
   await deutsch('Einstellungen');
   await ev('document.querySelector(".dialog .dialog-kopf .ikon").click()');
+
+  // Bildschirm (VNC_PORT); danach wieder das Terminal vorn
+  if (VNC_PORT) {
+    await bildschirm('App.aktivieren(App.tabs.find((x) => x.art !== "vnc") || null)');
+  }
 
   // Neuladen: Sitzung muss wieder angehaengt werden
   await cdp('Page.reload');

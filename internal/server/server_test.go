@@ -16,7 +16,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -41,6 +43,8 @@ type sshOptionen struct {
 	exec     string
 	ohneSFTP bool
 	flut     bool // die Shell gibt ohne Pause Ausgabe aus
+	// ohneWeiterleitung lehnt direct-tcpip ab (wie AllowTcpForwarding no).
+	ohneWeiterleitung bool
 }
 
 type testSSH struct {
@@ -48,6 +52,70 @@ type testSSH struct {
 	hostKey ssh.PublicKey
 	kanaele atomic.Int32 // je geoeffnetem Session-Kanal +1
 	offen   atomic.Int32 // gerade offene Session-Kanaele
+
+	zieleMu sync.Mutex
+	ziele   []string     // Ziele der direct-tcpip-Kanaele (host:port)
+	tunnel  atomic.Int32 // gerade offene direct-tcpip-Kanaele
+}
+
+// weiterleitungsZiele liefert die Ziele aller bisherigen direct-tcpip-Kanaele.
+func (ts *testSSH) weiterleitungsZiele() []string {
+	ts.zieleMu.Lock()
+	defer ts.zieleMu.Unlock()
+	return append([]string(nil), ts.ziele...)
+}
+
+// weiterleiten bedient einen direct-tcpip-Kanal (lokale Weiterleitung) wie OpenSSH.
+func (ts *testSSH) weiterleiten(nch ssh.NewChannel, o sshOptionen) {
+	var z struct {
+		Host    string
+		Port    uint32
+		VonHost string
+		VonPort uint32
+	}
+	if err := ssh.Unmarshal(nch.ExtraData(), &z); err != nil {
+		nch.Reject(ssh.ConnectionFailed, "bad request")
+		return
+	}
+	ziel := net.JoinHostPort(z.Host, strconv.Itoa(int(z.Port)))
+	ts.zieleMu.Lock()
+	ts.ziele = append(ts.ziele, ziel)
+	ts.zieleMu.Unlock()
+	// Nur zum eigenen Rechner (wie Keyways Tunnel zu 127.0.0.1:<vncPort>): Der Test-Server
+	// laeuft auch fuer Klicktests (TestSSHHalten) und soll nie ins Netz weiterleiten.
+	ip := net.ParseIP(z.Host)
+	if o.ohneWeiterleitung || ip == nil || !ip.IsLoopback() {
+		nch.Reject(ssh.Prohibited, "administratively prohibited")
+		return
+	}
+	nc, err := net.Dial("tcp", ziel)
+	if err != nil {
+		nch.Reject(ssh.ConnectionFailed, "connect failed")
+		return
+	}
+	ch, reqs, err := nch.Accept()
+	if err != nil {
+		nc.Close()
+		return
+	}
+	ts.tunnel.Add(1)
+	go ssh.DiscardRequests(reqs)
+	var fertig sync.WaitGroup
+	fertig.Add(2)
+	go func() {
+		defer fertig.Done()
+		io.Copy(ch, nc)
+		ch.Close()
+	}()
+	go func() {
+		defer fertig.Done()
+		io.Copy(nc, ch)
+		nc.Close()
+	}()
+	go func() {
+		fertig.Wait()
+		ts.tunnel.Add(-1)
+	}()
 }
 
 func sshTestServer(t *testing.T, benutzer, passwort string) (addr string) {
@@ -115,6 +183,10 @@ func sshTestServerMit(t *testing.T, o sshOptionen) *testSSH {
 				}
 				go ssh.DiscardRequests(reqs)
 				for nch := range chans {
+					if nch.ChannelType() == "direct-tcpip" {
+						ts.weiterleiten(nch, o)
+						continue
+					}
 					if nch.ChannelType() != "session" {
 						nch.Reject(ssh.UnknownChannelType, "")
 						continue

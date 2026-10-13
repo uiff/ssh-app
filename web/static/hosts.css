@@ -62,6 +62,51 @@
 .host-zeile:hover .status-punkt { border-color: var(--flaeche2); }
 .host-zeile.aktiv .status-punkt { border-color: var(--wahl); }
 
+/* Host mit Bildschirm (VNC): Aktionen Terminal und Bildschirm. Touch: beide sichtbar, als Paar
+   umrandet. Maus: nur die Aktion, die nicht schon das Anklicken der Zeile ist, beim Ueberfahren —
+   schwebend ueber dem Zeilenende, damit der Name ohne Ueberfahren die volle Breite hat. */
+.host-aktionen { display: flex; flex: none; align-items: center; border: 1px solid var(--linie); border-radius: 10px; }
+.host-aktionen .ikon { color: var(--leise); }
+.host-aktionen .ikon:hover { color: var(--text); background: var(--wahl); }
+.host-aktionen .aktion-terminal { border-radius: 9px 0 0 9px; }
+.host-aktionen .aktion-bildschirm { border-radius: 0 9px 9px 0; }
+.mini-bild { display: block; flex: none; width: 30px; height: 22px; object-fit: cover; border-radius: 3px; border: 1px solid var(--linie2); background: var(--term); }
+.vnc-marke, .aktion-text { display: none; }
+/* Touch in schmaler Leiste (Tablet: 270 px, kleine Telefone): Die Aktionen stehen mit Wort unter dem
+   Namen, sonst bliebe fuer den Namen kaum Platz. */
+.host-liste { container: hostliste / inline-size; }
+@media not all and (hover: hover) and (pointer: fine) {
+  @container hostliste (max-width: 329px) {
+    .host-zeile.mit-vnc { flex-wrap: wrap; }
+    .host-zeile.mit-vnc > .zeile { flex: 1 1 0; }
+    .host-zeile.mit-vnc .host-aktionen { order: 2; flex: 0 0 calc(100% - 12px); margin: -4px 4px 8px 8px; gap: 6px; border: 0; }
+    .host-zeile.mit-vnc .host-aktionen .ikon { flex: 1 1 auto; min-width: 0; width: auto; gap: 8px; padding: 0 10px; border: 1px solid var(--linie); border-radius: 8px; color: var(--text2); font-size: 13.5px; }
+    .host-zeile.mit-vnc .aktion-text { display: inline; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  }
+}
+@media (hover: hover) and (pointer: fine) {
+  .host-zeile.mit-vnc { position: relative; }
+  /* Tastatur: Aktionen sichtbar, solange etwas in der Zeile den Fokus hat (Maus-Klick zaehlt nicht). */
+  .host-zeile.mit-vnc:has(:focus-visible) { background: var(--flaeche2); }
+  .host-zeile.mit-vnc.aktiv:has(:focus-visible) { background: var(--wahl); }
+  .host-aktionen { position: absolute; right: 44px; top: 50%; transform: translateY(-50%); border: 0; border-radius: 8px; opacity: 0; pointer-events: none; transition: opacity .12s ease;
+    background: var(--flaeche2); box-shadow: -14px 0 10px -6px var(--flaeche2); }
+  .host-zeile.aktiv .host-aktionen { background: var(--wahl); box-shadow: -14px 0 10px -6px var(--wahl); }
+  .host-zeile:hover .host-aktionen, .host-zeile:has(:focus-visible) .host-aktionen { opacity: 1; pointer-events: auto; }
+  .host-aktionen .ikon { border-radius: 8px; }
+  .host-aktionen .aktion-terminal, .host-aktionen.haupt-vnc .aktion-bildschirm { display: none; }
+  .host-aktionen.haupt-vnc .aktion-terminal { display: inline-flex; }
+  .host-zeile.aktiv .host-aktionen .ikon:hover { background: var(--flaeche2); }
+  /* Ohne Ueberfahren zeigt ein kleines Symbol vor der Adresse, dass es einen Bildschirm gibt. */
+  .vnc-marke { display: inline-flex; vertical-align: -2px; margin-right: 6px; color: var(--leise); }
+}
+
+/* Grosses Vorschaubild neben der Leiste (Maus auf dem Bildschirm-Knopf) */
+.vorschau-karte { position: fixed; z-index: 45; width: 300px; padding: 6px; border: 1px solid var(--linie2); border-radius: 12px; background: var(--flaeche); box-shadow: 0 16px 40px rgba(0,0,0,.5); pointer-events: none; }
+.vorschau-karte img { display: block; width: 100%; height: auto; max-height: 240px; object-fit: contain; border-radius: 8px; background: var(--term); }
+.vorschau-unter { display: flex; align-items: center; gap: 6px; padding: 7px 4px 2px; font-size: 12.5px; color: var(--text2); min-width: 0; }
+.vorschau-unter span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
 /* Leere Liste, Abschnitte (Tresor, Snippets) */
 .leiste-leer { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 36px 20px; text-align: center; }
 .leiste-leer .geraet-feld { margin-bottom: 4px; color: var(--akzent); background: var(--akzent-grund); border-color: transparent; }
@@ -144,6 +189,37 @@
 .farbpunkt.ohne { border: 2px dashed var(--linie2); }
 .farbknopf[aria-pressed=true] .farbpunkt { box-shadow: 0 0 0 2px var(--flaeche), 0 0 0 4px var(--text); }
 
+/* Schalter (Checkbox mit role=switch): Ein/Aus fuer den Bildschirm und die Vorschaubilder */
+input.schalter, .check input.schalter { -webkit-appearance: none; appearance: none; position: relative; flex: none; width: 44px; height: 26px; margin: 0; border-radius: 13px; border: 0; background: var(--linie2); cursor: pointer; transition: background .15s ease; }
+input.schalter::before { content: ''; position: absolute; top: 3px; left: 3px; width: 20px; height: 20px; border-radius: 50%; background: var(--text2); transition: transform .15s ease, background .15s ease; }
+input.schalter:checked { background: var(--akzent); }
+input.schalter:checked::before { transform: translateX(18px); background: var(--akzent-text); }
+
+/* Bildschirm (VNC) im Host-Dialog */
+.vnc-teil { display: flex; flex-direction: column; border: 1px solid var(--linie); border-radius: 12px; background: var(--grund); }
+.check.vnc-schalter { align-items: center; gap: 12px; padding: 10px 14px 10px 10px; }
+.vnc-schalter .vnc-symbol { color: var(--akzent); background: var(--akzent-grund); border-color: transparent; }
+.vnc-schalter-text, .vorschau-schalter-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.vnc-schalter-text b, .vorschau-schalter-text b { font-weight: 600; }
+.vnc-aus-hinweis { margin: -6px 14px 12px 56px; font-size: 12.5px; line-height: 1.45; color: var(--warn-text); }
+/* Port schmal, Passwort breit (der Platzhalter «gespeichert — leer lassen = unveraendert» passt ganz). */
+.vnc-raster { grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); }
+.vnc-felder { display: flex; flex-direction: column; gap: 16px; padding: 14px; border-top: 1px solid var(--linie); }
+.weg-wahl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.weg-karte { display: flex; align-items: flex-start; gap: 10px; min-height: 44px; padding: 12px; border: 1px solid var(--linie); border-radius: 10px; background: var(--flaeche); cursor: pointer; }
+.weg-karte:hover { border-color: var(--linie2); }
+.weg-karte:has(input:checked) { border-color: var(--akzent); background: var(--akzent-grund); }
+.weg-karte input { width: 20px; height: 20px; margin: 1px 0 0; flex: none; accent-color: var(--akzent); }
+.weg-text { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
+.weg-titel { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; }
+.weg-titel b { font-weight: 600; }
+.weg-text small { font-size: 12.5px; line-height: 1.45; color: var(--text2); }
+.weg-marke { display: inline-flex; align-items: center; height: 20px; padding: 0 8px; border-radius: 10px; font-size: 11.5px; font-weight: 600; white-space: nowrap; }
+.weg-marke.gut { background: var(--gut-grund); color: var(--gut-hell); }
+.weg-marke.warn { background: var(--warn-grund); color: var(--warn); }
+.vnc-warnung { border: 1px solid var(--warn-rand); }
+.vnc-warnung svg.ic { color: var(--warn); margin-top: 1px; }
+
 /* ---------- Zugang-Dialog ---------- */
 .fp-hinweis, .zugang-dialog .fp { overflow-wrap: anywhere; word-break: break-all; }
 
@@ -160,6 +236,11 @@
 .ueber-name { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
 .ueber-name b { font-size: 17px; font-weight: 600; letter-spacing: .01em; }
 .ueber-name span { font-size: 13.5px; color: var(--text2); }
+
+/* ---------- Einstellungen: Vorschaubilder (VNC) ---------- */
+.check.vorschau-schalter { align-items: center; gap: 14px; padding: 6px 0; }
+.vorschau-reihe { gap: 8px 14px; }
+.vorschau-bestand { font-size: 13px; color: var(--leise); font-variant-numeric: tabular-nums; }
 
 /* ---------- Einstellungen: Akzentfarbe ---------- */
 .akzente { display: flex; flex-wrap: wrap; gap: 8px; }
@@ -183,6 +264,9 @@
   .host-zeile > .zeile { min-height: 56px; }
   .leiste-suche { padding: 12px 10px 8px 12px; }
   .gw-kacheln { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .weg-wahl { grid-template-columns: minmax(0, 1fr); }
+  .vnc-raster { grid-template-columns: minmax(0, 1fr); }
+  .host-aktionen { margin-left: 2px; }
   .erweitert .raster2 { gap: 16px; }
   /* Backup-Knoepfe untereinander in voller Breite (englische Texte sind nebeneinander zu lang) */
   .einst-knoepfe .btn { flex: 1 1 100%; }

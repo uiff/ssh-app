@@ -186,7 +186,7 @@ class Palette {
     setTimeout(() => {
       if (this.offen || dialogStapel.length || App.istTelefon() || !App.aktiv) return;
       const f = document.activeElement;
-      if (!f || f === document.body) App.aktiv.term.focus();
+      if (!f || f === document.body) App.tabFokus(App.aktiv);
     }, 0);
   }
 
@@ -231,7 +231,8 @@ class Palette {
       if (x.art === 'host') {
         const tab = App.tabs.find((y) => y.hostId === x.host.id && y.zustand === 'bereit');
         titel = x.host.name; unter = hostZeile(x.host); q = t(tab ? 'hilfe.host.verbunden' : 'hilfe.host.verbinden');
-        symbol = hostSymbol(x.host, 20, tab ? 'bereit' : '');
+        // Hosts mit Bildschirm (VNC): letztes Vorschaubild statt Geraetesymbol
+        symbol = x.host.vnc && App.vncVorschauBild ? App.vncVorschauBild(x.host, 'mini') : hostSymbol(x.host, 20, tab ? 'bereit' : '');
       } else if (x.art === 'snippet') { titel = x.snippet.name; unter = x.snippet.befehl; q = t('hilfe.snippet'); }
       else {
         titel = hilfeText(x.t.beispiel ? x.t.beispiel.text : x.t.beschreibung); unter = x.t.beispiel ? optionenAufloesen(x.t.beispiel.befehl) : x.t.name; q = x.t.name;
@@ -259,7 +260,7 @@ class Palette {
   ausfuehrenOderZeigen(geklickt) {
     const x = this.treffer[this.wahl];
     if (!x) return;
-    if (x.art === 'host') { this.schliessen(); App.verbinden(x.host); return; }
+    if (x.art === 'host') { this.schliessen(); App.verbinden(x.host, { art: App.hostHauptAktion(x.host) }); return; }
     if (App.istTelefon() || geklickt) this.detailZeigen(geklickt);
     if (!geklickt && this.aktuell) this.aktuell.einfuegen();
   }
@@ -280,9 +281,17 @@ class Palette {
     // Telefon: Das Detail liegt ueber der Liste — die Zurueck-Geste fuehrt zur Liste zurueck.
     if (App.istTelefon() && !this.detailEbene) this.detailEbene = ebeneAuf(() => this.detailZu());
     if (x.art === 'host') {
+      // Mit Bildschirm (VNC): Vorschaubild und zwei Wege — Terminal und Bildschirm; die Hauptaktion
+      // des Hosts (HMI direkt ohne SSH: Bildschirm) ist hervorgehoben.
+      const vnc = x.host.vnc && App.vncVorschauBild;
+      const haupt = App.hostHauptAktion(x.host);
+      const oeffnen = (art) => () => { this.schliessen(); App.verbinden(x.host, { art }); };
       ersetzen(this.detail, zurueck || '', el('div', { class: 'reihe' }, hostSymbol(x.host, 24), el('h3', { style: { margin: 0 } }, x.host.name)),
         el('div', { style: { fontSize: '13px', color: 'var(--leise)' } }, geraetName(x.host.geraet)), el('code', null, hostZeile(x.host)),
-        el('button', { class: 'btn primaer', type: 'button', onclick: () => { this.schliessen(); App.verbinden(x.host); } }, icon('terminal'), t('hilfe.verbinden')));
+        vnc ? App.vncVorschauBild(x.host, 'gross') : null,
+        el('div', { class: 'reihe' },
+          el('button', { class: 'btn' + (haupt === 'terminal' ? ' primaer' : ''), type: 'button', onclick: oeffnen('terminal') }, icon('terminal'), vnc ? t('vnc.start.terminal') : t('hilfe.verbinden')),
+          vnc ? el('button', { class: 'btn' + (haupt === 'vnc' ? ' primaer' : ''), type: 'button', onclick: oeffnen('vnc') }, icon('bildschirm'), t('vnc.start.bildschirm')) : null));
       return;
     }
     if (x.art === 'snippet') {

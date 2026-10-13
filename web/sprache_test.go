@@ -345,7 +345,7 @@ func katalogeLesen(t *testing.T) katalog {
 
 var (
 	platzhalterRe = regexp.MustCompile(`\{(\w+)\}`)
-	schluesselRe  = regexp.MustCompile(`^(basis|app|terminal|dateien|hilfe|hosts)\.[A-Za-z0-9_.]*$`)
+	schluesselRe  = regexp.MustCompile(`^(basis|app|terminal|dateien|hilfe|hosts|vnc)\.[A-Za-z0-9_.]*$`)
 	umlautRe      = regexp.MustCompile(`[äöüÄÖÜß]`)
 )
 

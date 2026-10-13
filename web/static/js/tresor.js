@@ -24,6 +24,116 @@ function hostsAnzahl(n) { return t(n === 1 ? 'hosts.anzahl.host' : 'hosts.anzahl
 const AUGE = 'M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12zM12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z';
 const AUGE_ZU = 'M3 3l18 18M10.6 5.1A10.4 10.4 0 0 1 12 5c6.5 0 10 7 10 7a17.6 17.6 0 0 1-3.1 4M6.6 6.6C3.7 8.5 2 12 2 12s3.5 7 10 7c1.9 0 3.6-.6 5-1.5M9.9 9.9a3 3 0 0 0 4.2 4.2';
 
+// Was Antippen der Host-Zeile oeffnet: das Terminal — ausser bei einem HMI-Panel, das nur ueber VNC
+// direkt erreichbar ist (kein SSH-Zugang, kein Benutzername): dann gleich den Bildschirm.
+function hostHauptAktion(h) {
+  return h && h.vnc && h.vncWeg === 'direkt' && h.geraet === 'hmi' && !h.zugangId && !h.benutzer ? 'vnc' : 'terminal';
+}
+App.hostHauptAktion = hostHauptAktion;
+
+// ---------- Vorschaubilder (VNC) ----------
+// Nur in diesem Browser: localStorage «sshapp.vnc.vorschau.<hostId>» = JPEG-Data-URL (vnc.js
+// schreibt sie beim Trennen und alle 30 s). Einstellung «Vorschaubilder speichern» unter
+// lokal('vncVorschau') = true|false, Vorgabe an; aus = keine neuen Bilder, die alten sind geloescht.
+const VORSCHAU_PRAEFIX = 'sshapp.vnc.vorschau.';
+const VORSCHAU_FORM = /^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/;
+App.vorschau = {
+  an: () => lokal('vncVorschau', true) !== false,
+  // Data-URL des letzten Bildes oder '' (auch bei ausgeschalteter Einstellung).
+  lesen(hostId) {
+    if (!App.vorschau.an() || !hostId) return '';
+    let v = null;
+    try { v = localStorage.getItem(VORSCHAU_PRAEFIX + hostId); } catch (e) { return ''; }
+    if (v && v[0] === '"') { try { v = JSON.parse(v); } catch (e) { v = null; } }
+    return typeof v === 'string' && VORSCHAU_FORM.test(v) ? v : '';
+  },
+  // Fuer vnc.js: neues Bild merken (nur bei eingeschalteter Einstellung, hoechstens 64 KB) und das
+  // kleine Bild in der Host-Zeile gleich austauschen, ohne die Liste neu zu zeichnen (Filterfeld).
+  speichern(hostId, dataUrl) {
+    const url = String(dataUrl || '');
+    if (!App.vorschau.an() || !hostId || url.length > 64 * 1024 || !VORSCHAU_FORM.test(url)) return false;
+    try { localStorage.setItem(VORSCHAU_PRAEFIX + hostId, url); } catch (e) { return false; }
+    for (const k of document.querySelectorAll('.host-zeile[data-host-id="' + Number(hostId) + '"] .aktion-bildschirm')) {
+      const bild = k.querySelector('.mini-bild');
+      if (bild) { bild.src = url; continue; }
+      const symbol = k.querySelector('svg.ic');
+      if (symbol) symbol.replaceWith(el('img', { class: 'mini-bild', src: url, alt: '' }));
+      k.classList.add('mit-bild');
+      k.removeAttribute('title');
+    }
+    return true;
+  },
+  loeschen(hostId) { try { localStorage.removeItem(VORSCHAU_PRAEFIX + hostId); } catch (e) { /* privat */ } },
+  // Alle gespeicherten Vorschaubilder: { n, bytes }.
+  bestand() {
+    let n = 0, bytes = 0;
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.startsWith(VORSCHAU_PRAEFIX)) { n++; bytes += (localStorage.getItem(k) || '').length; }
+      }
+    } catch (e) { /* privat */ }
+    return { n, bytes };
+  },
+  alleLoeschen() {
+    const weg = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(VORSCHAU_PRAEFIX)) weg.push(k); }
+      for (const k of weg) localStorage.removeItem(k);
+    } catch (e) { /* privat */ }
+    vorschauVerbergen();
+    if (App.seitenleiste) App.seitenleiste.zeichnen();
+    return weg.length;
+  },
+  // Bilder zu Hosts, die es nicht mehr gibt oder die kein VNC mehr haben, entfernen (etwa in einem
+  // anderen Browser geloescht): Ein neu angelegter Host mit derselben ID zeigte sonst das Bild
+  // eines alten Geraets. Aufruf nach jedem Laden der Daten (App.datenLaden).
+  aufraeumen(hosts) {
+    const mitVnc = new Set((hosts || []).filter((h) => h.vnc).map((h) => VORSCHAU_PRAEFIX + h.id));
+    const weg = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k && k.startsWith(VORSCHAU_PRAEFIX) && !mitVnc.has(k)) weg.push(k); }
+      for (const k of weg) localStorage.removeItem(k);
+    } catch (e) { /* privat */ }
+    return weg.length;
+  },
+  // Ein- oder ausschalten; liefert die Zahl der dabei geloeschten Bilder.
+  setzen(an) {
+    lokalSetzen('vncVorschau', !!an);
+    if (!an) return App.vorschau.alleLoeschen();
+    if (App.seitenleiste) App.seitenleiste.zeichnen();
+    return 0;
+  },
+};
+
+// Desktop mit Maus: grosses Vorschaubild neben der Leiste, solange der Zeiger auf dem
+// Bildschirm-Knopf eines Hosts liegt (Touch: das kleine Bild im Knopf genuegt).
+let vorschauKarte = null;
+const mitMaus = window.matchMedia('(hover: hover) and (pointer: fine)');
+function vorschauZeigen(knopf, h, url) {
+  vorschauVerbergen();
+  if (!mitMaus.matches || !url) return;
+  const bild = el('img', { src: url, alt: '' });
+  const karte = el('div', { class: 'vorschau-karte', 'aria-hidden': 'true' }, bild,
+    el('div', { class: 'vorschau-unter' }, icon('bildschirm', 14), el('span', null, t('hosts.vorschau.letztes', { name: h.name }))));
+  vorschauKarte = karte;
+  document.body.append(karte);
+  const setzen = () => {
+    if (vorschauKarte !== karte || !knopf.isConnected) { vorschauVerbergen(); return; }
+    const r = knopf.getBoundingClientRect();
+    const leiste = knopf.closest('.seite');
+    const links = Math.min((leiste ? leiste.getBoundingClientRect().right : r.right) + 10, window.innerWidth - karte.offsetWidth - 8);
+    const oben = Math.max(8, Math.min(window.innerHeight - karte.offsetHeight - 8, r.top + r.height / 2 - karte.offsetHeight / 2));
+    karte.style.left = Math.max(8, links) + 'px';
+    karte.style.top = oben + 'px';
+  };
+  setzen();
+  bild.addEventListener('load', setzen);
+}
+function vorschauVerbergen() {
+  if (vorschauKarte) { vorschauKarte.remove(); vorschauKarte = null; }
+}
+
 class Seitenleiste {
   constructor() {
     this.reiter = lokal('reiter', 'hosts');
@@ -41,6 +151,7 @@ class Seitenleiste {
   reiterSetzen(r) { this.reiter = r; lokalSetzen('reiter', r); this.zeichnen(); }
 
   zeichnen() {
+    vorschauVerbergen();
     const r = (id, text) => el('button', { type: 'button', role: 'tab', 'aria-selected': this.reiter === id ? 'true' : 'false', onclick: () => this.reiterSetzen(id) }, text);
     ersetzen(this.reiterLeiste, r('hosts', t('hosts.reiter.hosts')), r('tresor', t('hosts.reiter.tresor')), r('snippets', t('hosts.reiter.snippets')));
     if (this.reiter === 'tresor') this.tresorZeichnen();
@@ -68,7 +179,7 @@ class Seitenleiste {
       onkeydown: (e) => {
         if (e.key !== 'Enter') return;
         const treffer = this.treffer();
-        if (treffer.length === 1) { e.preventDefault(); this.verbinden(treffer[0]); }
+        if (treffer.length === 1) { e.preventDefault(); this.verbinden(treffer[0], hostHauptAktion(treffer[0])); }
       } });
     ersetzen(this.inhalt,
       el('div', { class: 'leiste-suche' },
@@ -80,17 +191,20 @@ class Seitenleiste {
 
   passt(h) {
     const q = this.filter.trim().toLowerCase();
-    return !q || [h.name, h.adresse, h.benutzer, geraetName(h.geraet), ...(h.tags || [])].join(' ').toLowerCase().includes(q);
+    return !q || [h.name, h.adresse, h.benutzer, geraetName(h.geraet), h.vnc ? 'vnc' : '', ...(h.tags || [])].join(' ').toLowerCase().includes(q);
   }
 
   treffer() { return App.daten.hosts.filter((h) => this.passt(h)); }
 
-  verbinden(h) {
-    App.verbinden(h);
+  // art: 'terminal' (Vorgabe) oder 'vnc' (Bildschirm).
+  verbinden(h, art) {
+    vorschauVerbergen();
+    App.verbinden(h, { art: art === 'vnc' ? 'vnc' : 'terminal' });
     App.seiteUmschalten('links', false, true);
   }
 
   listeZeichnen(liste) {
+    vorschauVerbergen();
     const d = App.daten;
     const q = this.filter.trim();
     const verbunden = new Set(App.offeneTabs ? App.offeneTabs().filter((x) => x.zustand === 'bereit').map((x) => x.hostId) : []);
@@ -127,17 +241,40 @@ class Seitenleiste {
       g.o.id ? ikonKnopf('mehr', t('hosts.leiste.ordnerBearbeiten', { name: g.o.name }), (e) => ordnerMenue(g.o, e.currentTarget), { class: 'ikon ordner-mehr', 'aria-haspopup': 'menu' }) : null);
   }
 
+  // Host mit Bildschirm (VNC): zwei Aktionen, Terminal und Bildschirm. Touch: beide immer sichtbar;
+  // Maus: die Aktion, die nicht schon das Antippen der Zeile ist, beim Ueberfahren (wie der Stift).
+  // Der Bildschirm-Knopf zeigt das letzte Vorschaubild, falls eines gespeichert ist.
   hostEintrag(h, verbunden, aktiv) {
     const geraet = geraetName(h.geraet);
+    const vnc = !!h.vnc;
+    const haupt = hostHauptAktion(h);
     const feld = el('span', { class: 'geraet-feld', title: geraet, 'data-farbe': h.farbe ? true : null },
       geraetIcon(h.geraet, 18),
       verbunden ? el('span', { class: 'status-punkt' }) : null);
     if (h.farbe) feld.style.setProperty('--hostfarbe', h.farbe);
-    return el('div', { class: 'host-zeile' + (aktiv ? ' aktiv' : '') },
-      el('button', { class: 'zeile', type: 'button', 'aria-current': aktiv ? 'true' : null, onclick: () => this.verbinden(h) },
+    let aktionen = null;
+    if (vnc) {
+      const bild = App.vorschau.lesen(h.id);
+      const lBild = t('hosts.leiste.bildschirmOeffnen', { name: h.name });
+      const kBild = el('button', { class: 'ikon aktion-bildschirm' + (bild ? ' mit-bild' : ''), type: 'button', 'aria-label': lBild, title: bild ? null : lBild,
+        onclick: () => this.verbinden(h, 'vnc'),
+        onmouseenter: (e) => vorschauZeigen(e.currentTarget, h, App.vorschau.lesen(h.id)), onmouseleave: vorschauVerbergen },
+      bild ? el('img', { class: 'mini-bild', src: bild, alt: '' }) : icon('bildschirm', 18),
+      el('span', { class: 'aktion-text', 'aria-hidden': 'true' }, t('hosts.leiste.bildschirm')));
+      const lTerm = t('hosts.leiste.terminalOeffnen', { name: h.name });
+      // Die Woerter erscheinen nur, wenn die Aktionen in schmalen Leisten unter dem Namen stehen (hosts.css).
+      aktionen = el('span', { class: 'host-aktionen' + (haupt === 'vnc' ? ' haupt-vnc' : '') },
+        el('button', { class: 'ikon aktion-terminal', type: 'button', 'aria-label': lTerm, title: lTerm, onclick: () => this.verbinden(h, 'terminal') },
+          icon('terminal'), el('span', { class: 'aktion-text', 'aria-hidden': 'true' }, t('hosts.leiste.terminal'))),
+        kBild);
+    }
+    return el('div', { class: 'host-zeile' + (aktiv ? ' aktiv' : '') + (vnc ? ' mit-vnc' : ''), 'data-host-id': h.id },
+      el('button', { class: 'zeile', type: 'button', 'aria-current': aktiv ? 'true' : null, onclick: () => this.verbinden(h, haupt) },
         feld,
-        el('span', { class: 'haupt' }, el('b', null, h.name), el('small', null, hostZeile(h))),
-        el('span', { class: 'sr' }, ', ' + geraet + (verbunden ? ', ' + t('hosts.leiste.verbunden') : ''))),
+        el('span', { class: 'haupt' }, el('b', null, h.name),
+          el('small', null, vnc ? el('span', { class: 'vnc-marke', title: t('hosts.leiste.mitBildschirm') }, icon('bildschirm', 12)) : null, hostZeile(h))),
+        el('span', { class: 'sr' }, ', ' + geraet + (haupt === 'vnc' ? ', ' + t('hosts.leiste.oeffnetBildschirm') : '') + (verbunden ? ', ' + t('hosts.leiste.verbunden') : ''))),
+      aktionen,
       ikonKnopf('stift', t('hosts.leiste.hostBearbeiten', { name: h.name }), () => App.hostBearbeiten(h), { class: 'ikon bearbeiten' }));
   }
 
@@ -405,6 +542,73 @@ App.hostBearbeiten = function (h) {
   }));
   farbenZeichnen();
 
+  // --- Bildschirm (VNC) ---
+  // Weg «ssh» (Vorgabe): Keyway meldet sich per SSH an und verbindet sich dort mit 127.0.0.1:Port.
+  // Weg «direkt»: TCP zur Adresse des Hosts, unverschluesselt (HMI-Panels ohne SSH).
+  // Passwort: verschluesselt im Tresor; leer = unveraendert, ohne gespeichertes fragt Keyway beim Verbinden.
+  f.vnc = el('input', { type: 'checkbox', id: 'h-vnc', class: 'schalter', role: 'switch', checked: !!h.vnc, 'aria-describedby': 'h-vnc-hinweis' });
+  f.vncPort = el('input', { id: 'h-vnc-port', type: 'number', inputmode: 'numeric', min: 1, max: 65535, value: h.vncPort || 5900, 'aria-describedby': 'h-vnc-port-hinweis' });
+  let vncWeg = h.vncWeg === 'direkt' ? 'direkt' : 'ssh';
+  const wegKarte = (wert, titel, text, marke) => el('label', { class: 'weg-karte' },
+    el('input', { type: 'radio', name: 'h-vnc-weg', value: wert, checked: vncWeg === wert, onchange: () => { vncWeg = wert; vncZeigen(); } }),
+    el('span', { class: 'weg-text' }, el('span', { class: 'weg-titel' }, el('b', null, titel), marke), el('small', null, text)));
+  const wegWahl = el('div', { class: 'weg-wahl', role: 'radiogroup', 'aria-labelledby': 'h-vnc-weg-label' },
+    wegKarte('ssh', t('hosts.vnc.wegSsh'), t('hosts.vnc.wegSshText'), el('span', { class: 'weg-marke gut' }, t('hosts.vnc.empfohlen'))),
+    wegKarte('direkt', t('hosts.vnc.wegDirekt'), t('hosts.vnc.wegDirektText'), el('span', { class: 'weg-marke warn' }, t('hosts.vnc.unverschluesselt'))));
+  const direktWarnung = el('div', { class: 'meldung warn vnc-warnung' }, icon('warnung'), el('span', null, t('hosts.vnc.direktWarnung')));
+  const vncHatPw = !!h.hatVncPasswort;
+  f.vncPw = el('input', { id: 'h-vnc-pw', type: 'password', autocomplete: 'new-password', autocapitalize: 'off', spellcheck: 'false',
+    placeholder: t(vncHatPw ? 'hosts.vnc.pwGespeichert' : 'hosts.vnc.pwLeer'), 'aria-describedby': 'h-vnc-pw-hinweis', oninput: () => vncPwHinweis() });
+  const vncPwZeigen = el('button', { type: 'button', class: 'pw-zeigen', 'aria-label': t('hosts.host.pwAnzeigen'), 'aria-pressed': 'false', onclick: () => {
+    const sichtbar = f.vncPw.type === 'password';
+    f.vncPw.type = sichtbar ? 'text' : 'password';
+    vncPwZeigen.setAttribute('aria-pressed', sichtbar ? 'true' : 'false');
+    vncPwZeigen.setAttribute('aria-label', t(sichtbar ? 'hosts.host.pwVerbergen' : 'hosts.host.pwAnzeigen'));
+    ersetzen(vncPwZeigen, strichIcon(sichtbar ? AUGE_ZU : AUGE, 18));
+  } }, strichIcon(AUGE, 18));
+  f.vncPwWeg = el('input', { type: 'checkbox', id: 'h-vnc-pw-weg', onchange: () => vncZeigen() });
+  const vncPwHinweisEl = el('div', { id: 'h-vnc-pw-hinweis', class: 'hinweis' });
+  const vncPortHinweis = el('div', { id: 'h-vnc-port-hinweis', class: 'hinweis' });
+  const vncPwHinweis = () => {
+    if (f.vncPwWeg.checked) vncPwHinweisEl.textContent = t('hosts.vnc.pwWirdGeloescht');
+    else if (f.vncPw.value.length > 8) vncPwHinweisEl.textContent = t('hosts.vnc.pwAcht');
+    else vncPwHinweisEl.textContent = t(vncHatPw ? 'hosts.vnc.pwHinweisGespeichert' : 'hosts.vnc.pwHinweis');
+  };
+  const vncFelder = el('div', { id: 'h-vnc-felder', class: 'vnc-felder' },
+    el('div', { class: 'feld' }, el('span', { class: 'label', id: 'h-vnc-weg-label' }, t('hosts.vnc.weg')), wegWahl),
+    direktWarnung,
+    el('div', { class: 'raster2 vnc-raster' },
+      el('div', { class: 'feld' }, el('label', { for: 'h-vnc-port' }, t('hosts.vnc.port')), f.vncPort,
+        vncPortHinweis),
+      el('div', { class: 'feld' }, el('label', { for: 'h-vnc-pw' }, t('hosts.vnc.passwort')),
+        el('div', { class: 'pw-feld' }, f.vncPw, vncPwZeigen),
+        vncHatPw ? el('label', { class: 'check pw-merken' }, f.vncPwWeg, el('span', null, t('hosts.vnc.pwEntfernen'))) : null,
+        vncPwHinweisEl)));
+  const vncAusHinweis = el('div', { class: 'hinweis vnc-aus-hinweis' });
+  const vncZeigen = () => {
+    const an = f.vnc.checked;
+    vncFelder.classList.toggle('versteckt', !an);
+    direktWarnung.classList.toggle('versteckt', vncWeg !== 'direkt');
+    vncPortHinweis.textContent = t(vncWeg === 'direkt' ? 'hosts.vnc.portHinweis' : 'hosts.vnc.portHinweisSsh');
+    // Aus mit gespeichertem Passwort: es wird beim Speichern geloescht (wie beim SSH-Passwort).
+    vncAusHinweis.textContent = !an && vncHatPw ? t('hosts.vnc.ausPwWeg') : '';
+    vncAusHinweis.classList.toggle('versteckt', an || !vncHatPw);
+    f.vncPw.disabled = f.vncPwWeg.checked;
+    vncPwZeigen.disabled = f.vncPwWeg.checked;
+    if (f.vncPwWeg.checked) f.vncPw.value = '';
+    vncPwHinweis();
+  };
+  f.vnc.addEventListener('change', () => vncZeigen());
+  const vncTeil = el('div', { class: 'vnc-teil' },
+    el('label', { class: 'check vnc-schalter', for: 'h-vnc' },
+      el('span', { class: 'geraet-feld vnc-symbol' }, icon('bildschirm', 18)),
+      el('span', { class: 'vnc-schalter-text' }, el('b', null, t('hosts.vnc.titel')),
+        el('span', { id: 'h-vnc-hinweis', class: 'check-hinweis' }, t('hosts.vnc.hinweis'))),
+      f.vnc),
+    vncAusHinweis,
+    vncFelder);
+  vncZeigen();
+
   const tagListe = () => f.tags.value.split(',').map((x) => x.trim()).filter(Boolean);
   const erwText = el('small');
   const zusammenfassen = () => {
@@ -413,6 +617,7 @@ App.hostBearbeiten = function (h) {
     if (port && port !== 22) teile.push(t('hosts.host.erwPort', { port }));
     const z = f.anmeldung.value === 'eigen' ? null : zugangVon(+f.anmeldung.value);
     if (z) teile.push(t(z.art === 'schluessel' ? 'hosts.host.erwSchluessel' : 'hosts.host.erwZugang', { name: z.name }));
+    if (f.vnc.checked) teile.push(t(vncWeg === 'direkt' ? 'hosts.vnc.erwDirekt' : 'hosts.vnc.erwSsh'));
     const tags = tagListe();
     if (tags.length) teile.push(tags.join(', '));
     if (farbe) teile.push(farbName(farbe));
@@ -425,6 +630,7 @@ App.hostBearbeiten = function (h) {
     el('div', { class: 'raster2' },
       feld('h-port', t('hosts.host.port'), f.port),
       feld('h-tags', t('hosts.host.tags'), f.tags, t('hosts.host.tagsHinweis'))),
+    vncTeil,
     el('div', { class: 'feld' }, el('span', { class: 'label', id: 'h-farbe-label' }, t('hosts.host.farbe')), farbKnoepfe),
     el('label', { class: 'check' }, f.folgen, el('span', null, el('b', null, t('hosts.host.folgen')), el('br'),
       el('span', { class: 'check-hinweis' }, t('hosts.host.folgenHinweis')))),
@@ -490,6 +696,18 @@ App.hostBearbeiten = function (h) {
       fehlerZeigen(t('hosts.host.fehlerPort'));
       return null;
     }
+    const vnc = f.vnc.checked;
+    let vncPort = f.vncPort.value.trim() === '' ? 5900 : Number(f.vncPort.value);
+    if (!Number.isInteger(vncPort) || vncPort < 1 || vncPort > 65535) {
+      if (vnc) {
+        erweitertSetzen(true);
+        f.vncPort.setAttribute('aria-invalid', 'true');
+        fehlerZeigen(t('hosts.vnc.fehlerPort'));
+        return null;
+      }
+      vncPort = 5900; // ausgeschaltet: der Port zaehlt nicht
+    }
+    f.vncPort.removeAttribute('aria-invalid');
     const name = f.name.value.trim() || adresse;
     const benutzer = f.benutzer.value.trim();
     const pw = f.passwort.value;
@@ -522,6 +740,10 @@ App.hostBearbeiten = function (h) {
       const daten = {
         name, adresse, port, benutzer, zugangId, ordnerId: +f.ordner.value || 0, geraet,
         tags: tagListe(), farbe, pfadFolgen: f.folgen.checked, notiz: f.notiz.value,
+        vnc, vncPort, vncWeg,
+        // Neues VNC-Passwort nur, wenn eingetragen; ausgeschaltet oder «entfernen» loescht das gespeicherte.
+        vncPasswort: vnc && !f.vncPwWeg.checked ? f.vncPw.value : '',
+        vncPasswortEntfernen: vncHatPw && (!vnc || f.vncPwWeg.checked),
       };
       let r;
       try {
@@ -536,6 +758,8 @@ App.hostBearbeiten = function (h) {
         fehlerZeigen(text.join(' '));
         return null;
       }
+      // Ohne Bildschirm kein Vorschaubild mehr.
+      if (!vnc && r && r.id) App.vorschau.loeschen(r.id);
       // 3. Eigenen Zugang aufraeumen, wenn der Host ihn nicht mehr nutzt.
       let rest = null;
       if (eigenWeg) {
@@ -558,6 +782,7 @@ App.hostBearbeiten = function (h) {
     if (!(await frage(t(eigen ? 'hosts.host.loeschenFrageMitPw' : 'hosts.host.loeschenFrage', { name: h.name }), { ja: t('hosts.knopf.loeschen'), gefahr: true }))) return;
     try {
       await api('DELETE', '/api/hosts/' + h.id);
+      App.vorschau.loeschen(h.id);
       if (eigen) await api('DELETE', '/api/zugaenge/' + eigen.id).catch(() => {});
       dlg.zu(); App.datenLaden(); toast(t('hosts.host.geloescht'));
     } catch (e) { if (!e.abgemeldet) fehlerZeigen(t('hosts.host.fehlerLoeschen', { fehler: e.message })); }
@@ -567,7 +792,10 @@ App.hostBearbeiten = function (h) {
   const kLoeschen = !neu ? el('button', { class: 'btn gefahr links nur-desktop', type: 'button', onclick: loeschen }, icon('muell'), t('hosts.knopf.loeschen')) : null;
   if (!neu) erwBereich.append(el('div', { class: 'nur-telefon loeschen-telefon' }, el('button', { class: 'btn gefahr voll', type: 'button', onclick: loeschen }, icon('muell'), t('hosts.host.loeschen'))));
   const kAbbrechen = el('button', { class: 'btn nur-desktop', type: 'button', onclick: () => dlg.zu() }, t('hosts.knopf.abbrechen'));
-  const kVerbinden = el('button', { class: 'btn', type: 'button', onclick: async () => { const r = await speichern(); if (r) App.verbinden(r); } }, t('hosts.host.speichernVerbinden'));
+  const kVerbinden = el('button', { class: 'btn', type: 'button', onclick: async () => {
+    const r = await speichern();
+    if (r) App.verbinden(r, { art: hostHauptAktion(r) });
+  } }, t('hosts.host.speichernVerbinden'));
   const kSpeichern = el('button', { class: 'btn primaer', type: 'button', onclick: () => speichern() }, t('hosts.knopf.speichern'));
   const knoepfeSperren = (an) => { for (const k of [kLoeschen, kVerbinden, kSpeichern]) if (k) k.disabled = an; };
 

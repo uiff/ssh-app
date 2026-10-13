@@ -115,12 +115,26 @@ var geraeteIDs = []string{"", "sps", "hmi", "gateway", "iot", "wallbox", "wechse
 
 func geraetBekannt(id string) bool { return slices.Contains(geraeteIDs, id) }
 
+// hostEingabe: der Host plus die VNC-Passwort-Felder beim Speichern (V1). Ein leeres
+// vncPasswort bedeutet «unveraendert», entfernt wird nur mit vncPasswortEntfernen.
+type hostEingabe struct {
+	store.Host
+	VncPasswort          string `json:"vncPasswort"`
+	VncPasswortEntfernen bool   `json:"vncPasswortEntfernen"`
+}
+
+// vncWegBekannt: erlaubte Wege zum VNC-Server ("" gilt als ssh).
+func vncWegBekannt(weg string) bool {
+	return weg == "" || weg == store.VncWegSSH || weg == store.VncWegDirekt
+}
+
 func (s *Server) hostSpeichern(w http.ResponseWriter, r *http.Request) {
-	var h store.Host
-	if err := lesen(r, &h); err != nil {
+	var e hostEingabe
+	if err := lesen(r, &e); err != nil {
 		fehlerAus(w, r, http.StatusBadRequest, err)
 		return
 	}
+	h := e.Host
 	h.ID = pfadID(r)
 	h.Name, h.Adresse, h.Benutzer = strings.TrimSpace(h.Name), strings.TrimSpace(h.Adresse), strings.TrimSpace(h.Benutzer)
 	h.Geraet = strings.TrimSpace(h.Geraet)
@@ -139,9 +153,38 @@ func (s *Server) hostSpeichern(w http.ResponseWriter, r *http.Request) {
 		fehlerT(w, r, http.StatusBadRequest, "server.host.port")
 		return
 	}
+	if h.VncPort == 0 {
+		h.VncPort = store.VncPortVorgabe
+	}
+	if h.VncPort < 1 || h.VncPort > 65535 {
+		fehlerT(w, r, http.StatusBadRequest, "vnc.port")
+		return
+	}
+	h.VncWeg = strings.TrimSpace(h.VncWeg)
+	if !vncWegBekannt(h.VncWeg) {
+		fehlerT(w, r, http.StatusBadRequest, "vnc.weg", kurz(h.VncWeg, 40))
+		return
+	}
+	// Das VNC-Passwort kommt nur verschluesselt in die Datenbank; ohne Angabe bleibt es.
+	h.VncPasswortEnc, h.VncPasswortSetzen = nil, false
+	if e.VncPasswortEntfernen {
+		h.VncPasswortSetzen = true
+	}
+	if e.VncPasswort != "" {
+		enc, err := s.tr.Verschluesseln([]byte(e.VncPasswort))
+		if err != nil {
+			speicherFehler(w, r, err)
+			return
+		}
+		h.VncPasswortEnc, h.VncPasswortSetzen = enc, true
+	}
 	if err := s.st.HostSpeichern(&h); err != nil {
 		speicherFehler(w, r, err)
 		return
+	}
+	// Frisch lesen: hatVncPasswort stimmt auch, wenn das Passwort unveraendert blieb.
+	if gelesen, err := s.st.Host(h.ID); err == nil {
+		h = gelesen
 	}
 	jsonAntwort(w, http.StatusOK, h)
 }
@@ -502,10 +545,18 @@ func (s *Server) einspielen(w http.ResponseWriter, r *http.Request, nurFrisch bo
 		return
 	}
 	v.richtig()
-	// Unbekannte Geraetetypen (Backup einer neueren Version) werden zu «Allgemein».
+	// Unbekannte Geraetetypen (Backup einer neueren Version) werden zu «Allgemein»,
+	// unbekannte VNC-Wege zu «ssh», ungueltige VNC-Ports zu 5900.
 	for i := range sg.Hosts {
-		if !geraetBekannt(sg.Hosts[i].Geraet) {
-			sg.Hosts[i].Geraet = ""
+		h := &sg.Hosts[i].Host
+		if !geraetBekannt(h.Geraet) {
+			h.Geraet = ""
+		}
+		if !vncWegBekannt(h.VncWeg) {
+			h.VncWeg = store.VncWegSSH
+		}
+		if h.VncPort < 1 || h.VncPort > 65535 {
+			h.VncPort = store.VncPortVorgabe
 		}
 	}
 	s.kopfMu.Lock()
